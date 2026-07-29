@@ -1,0 +1,64 @@
+# Decision Log
+
+Why the code is the way it is. Add entries at the top; never delete —
+supersede.
+
+---
+
+## 2026-07-29 — Initial implementation decisions
+
+**D1. Simulator-first development.** No hardware exists yet (plan month 3),
+but the entire pipeline, experiment design, and dashboard can be built and
+honestly evaluated against a physics-based simulator that reproduces the
+*mechanisms* real CSI sensing uses (multipath fingerprints, body shadowing,
+phase corruption, packet loss). Alternative (wait for hardware) would idle
+months 1–3. Risk accepted: simulated accuracy ≠ real accuracy; mitigated by
+identical session format so hardware data drops in with zero code change.
+
+**D2. sklearn for defaults, torch optional.** RF/KNN/SVM/MLP cover the
+plan's traditional baselines and train in seconds on CPU; torch (~1.5 GB
+installed) would make the quick-start heavy for marginal demo benefit. Deep
+models (`cnn`, `cnn_gru`) are implemented but import torch lazily.
+
+**D3. Vanilla-JS single-file dashboard, not Vue/React.** The plan suggests
+Vue/Nuxt or React (§15); for a thesis demo a zero-build single HTML file
+served by FastAPI removes node/npm from the setup entirely. Revisit only if
+the dashboard needs multi-page operations views.
+
+**D4. NPZ session files, not PostgreSQL/Parquet.** One compressed .npz per
+session (~10 MB) with a JSON manifest is versionable, copyable, and
+trivially loadable; a database adds operational burden with no query need
+yet. Parquet export of *window features* remains a cheap add if wanted.
+
+**D5. Segment ids inside sessions.** Windows/filters must not cross the
+position jump between two standing captures; encoding contiguous captures as
+`seg` ids in the session file makes the constraint structural (enforced in
+`sessions_to_arrays`) instead of procedural.
+
+**D6. Amplitude-centric features; sanitized phase as secondary.** ESP32
+phase is unusable raw (random CFO/SFO per packet — reproduced in the
+simulator). Amplitude mean/std/motion-energy + phase-curvature mean is the
+standard commodity-hardware compromise in the literature.
+
+**D7. Fingerprint (ML) approach, not geometry (AoA/ToF).** ESP32 has one
+antenna and no timing resolution — SpotFi-style geometry is impossible on
+this hardware tier; fingerprinting with dense coverage is the viable path
+(and matches the plan's model list).
+
+**D8. Simulation realism parameters.** Standing sway σ≈1 cm (not 5 cm —
+tested: large sway destroys window-mean fingerprints and contradicts human
+biomechanics); scattered-ray gain 1.2 with 60% max LoS shadowing (visible
+but not dominant person signal); cross-day device re-mount σ=4 mm (≈ 0.2
+rad phase shift — noticeable cross-day degradation without erasing the
+fingerprint, matching literature behaviour qualitatively). These were tuned
+by experiment — see RESEARCH_NOTES §4; treat as simulator calibration knobs,
+not physical truth.
+
+**D9. Kalman constant-velocity for tracking** (not particle filter):
+adequate for single-person walking speeds, closed-form, no tuning burden
+beyond two noise scalars exposed in config. Particle filter listed in plan
+§11.2 stays a future comparison.
+
+**D10. 20-component PCA default.** Full features are 624-dim for 3 links;
+PCA(20) keeps RF/KNN fast and slightly improves cross-session error on the
+demo dataset. Set `n_pca_components: 0` to ablate.

@@ -1,0 +1,4 @@
+# Optional: deep models (cnn, cnn_gru in src/wifi_mapping/models/deep.py).
+# CPU build is enough for this project's model sizes:
+#   pip install -r requirements-torch.txt --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2

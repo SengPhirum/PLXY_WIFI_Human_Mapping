@@ -1,0 +1,64 @@
+# ============================================================================
+# Wi-Fi Human Mapping — default experiment configuration
+# Room geometry, link layout, and signal parameters used by the simulator,
+# the collection tools, the training pipeline, and the live dashboard.
+# Units: metres, Hz, dBm unless stated otherwise.
+# ============================================================================
+
+room:
+  name: "lab-room-A"
+  width: 5.0          # x extent (m)
+  depth: 6.0          # y extent (m)
+  height: 2.8         # ceiling height (m)
+
+grid:
+  cols: 4             # zones along x  -> zone ids 0..15, row-major from (0,0)
+  rows: 4             # zones along y
+
+# One transmitter + three receivers (initial configuration from the plan).
+# Positions are [x, y, z] in room coordinates; keep devices on fixed mounts.
+links:
+  tx:
+    id: "TX0"
+    pos: [2.5, 0.15, 1.2]
+  rx:
+    - id: "RX0"
+      pos: [0.15, 5.85, 1.2]
+    - id: "RX1"
+      pos: [4.85, 5.85, 1.2]
+    - id: "RX2"
+      pos: [4.85, 0.15, 1.2]
+
+signal:
+  carrier_freq_hz: 2.412e9    # Wi-Fi channel 1 (2.4 GHz)
+  bandwidth_hz: 20.0e6
+  n_subcarriers: 52           # ESP32 LLTF usable subcarriers
+  sample_rate_hz: 100         # CSI packet rate per link
+  noise_std: 0.05             # relative amplitude noise (simulator)
+  packet_loss: 0.02           # simulated packet-loss probability
+
+preprocess:
+  hampel_window: 11           # samples (per subcarrier, time axis)
+  hampel_sigmas: 3.0
+  lowpass_cutoff_hz: 10.0     # human motion energy lives < ~10 Hz
+  window_size: 100            # samples per sliding window (1 s @ 100 Hz)
+  window_step: 50             # 50% overlap
+  n_pca_components: 20        # per-link PCA on subcarrier axis (0 disables)
+
+model:
+  type: "rf"                  # rssi_knn | knn | svm | rf | mlp | cnn | cnn_gru
+  task: "both"                # zone (classification) | xy (regression) | both
+
+tracking:
+  process_noise: 0.35         # Kalman process noise (m/s^2)
+  measurement_noise: 0.45     # Kalman measurement noise (m)
+
+paths:
+  data_dir: "data"
+  models_dir: "data/models"
+  datasets_dir: "data/datasets"
+  sessions_dir: "data/sessions"
+
+server:
+  host: "127.0.0.1"
+  port: 8000

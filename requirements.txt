@@ -1,0 +1,13 @@
+# Core dependencies — everything the demo and training pipeline need.
+# Python 3.10+ (developed on 3.11).
+numpy>=1.26
+scipy>=1.11
+pandas>=2.0
+scikit-learn>=1.3
+pyyaml>=6.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pyserial>=3.5          # only used for real ESP32 collection
+matplotlib>=3.8        # offline figures for the thesis
+pyarrow>=15.0          # optional parquet export of window features
+pytest>=8.0

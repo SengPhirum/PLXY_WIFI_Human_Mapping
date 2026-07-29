@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wi-Fi Human Mapping — Live</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
+    --accent: #2a78d6; --raw: #898781; --gt: #52514e;
+    --good: #0ca30c; --critical: #d03b3b;
+    --heat-lo: #cde2fb; --heat-hi: #0d366b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+      --accent: #3987e5; --raw: #898781; --gt: #c3c2b7;
+      --heat-lo: #104281; --heat-hi: #9ec5f4;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh; padding: 20px;
+  }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+  h1 { font-size: 18px; font-weight: 650; }
+  .pill {
+    font-size: 12px; color: var(--ink-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px; background: var(--surface);
+  }
+  .pill .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--critical); margin-right: 6px; }
+  .pill.live .dot { background: var(--good); }
+  .layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px;
+  }
+  #mapCard { flex: 1 1 520px; }
+  #side { flex: 0 1 300px; display: flex; flex-direction: column; gap: 16px; min-width: 260px; }
+  canvas { display: block; width: 100%; height: auto; border-radius: 6px; }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tile .v { font-size: 22px; font-weight: 650; margin-top: 2px; }
+  .tile .v small { font-size: 12px; font-weight: 400; color: var(--ink-2); }
+  .controls { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; color: var(--ink-2); }
+  .controls label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px;
+    border-bottom: 1px solid var(--grid); }
+  td { padding: 4px 6px; border-bottom: 1px solid var(--grid);
+    color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wi-Fi Human Mapping</h1>
+  <span class="pill" id="status"><span class="dot"></span><span id="statusText">connecting…</span></span>
+  <span class="pill" id="modePill">mode: —</span>
+  <span class="pill" id="roomPill">room: —</span>
+</header>
+
+<div class="layout">
+  <div class="card" id="mapCard">
+    <canvas id="map" width="900" height="1080" aria-label="Floor plan with live position"></canvas>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--accent)"></span> predicted (smoothed)</span>
+      <span><span class="sw" style="background:var(--raw); border-radius:2px"></span> raw window estimate</span>
+      <span id="gtLegend" hidden><span style="color:var(--gt); font-weight:700">✕</span> ground truth (simulated)</span>
+      <span><span style="color:var(--muted)">▲</span> TX &nbsp; <span style="color:var(--muted)">■</span> RX</span>
+    </div>
+    <div class="controls">
+      <label><input type="checkbox" id="showHeat" checked> occupancy heatmap</label>
+      <label><input type="checkbox" id="showTrail" checked> trail</label>
+      <label><input type="checkbox" id="showGrid" checked> zone grid</label>
+      <button id="clearHeat" style="margin-left:auto">reset heatmap</button>
+    </div>
+  </div>
+
+  <div id="side">
+    <div class="card">
+      <h2>Live estimate</h2>
+      <div class="tiles">
+        <div class="tile"><div class="k">Zone</div><div class="v" id="tZone">—</div></div>
+        <div class="tile"><div class="k">Position</div><div class="v" id="tPos" style="font-size:16px">—</div></div>
+        <div class="tile"><div class="k">Error <small>(sim)</small></div><div class="v" id="tErr">—</div></div>
+        <div class="tile"><div class="k">Latency</div><div class="v" id="tLat">—</div></div>
+        <div class="tile"><div class="k">Updates</div><div class="v" id="tRate">—</div></div>
+        <div class="tile"><div class="k">Predictions</div><div class="v" id="tCount">0</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Recent predictions</h2>
+      <table aria-label="Recent predictions">
+        <thead><tr><th>t</th><th>x (m)</th><th>y (m)</th><th>zone</th><th>err (m)</th></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const canvas = $("map"), ctx = canvas.getContext("2d");
+let CFG = null, scale = 100, pad = 40;
+let last = null, trail = [], count = 0, lastTimes = [];
+let heat = null, heatCols = 48, heatRows = 48;
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function resize() {
+  if (!CFG) return;
+  const w = Math.min($("mapCard").clientWidth - 28, 860);
+  scale = (w - 2 * pad) / CFG.room.width;
+  canvas.width = w;
+  canvas.height = Math.round(CFG.room.depth * scale + 2 * pad);
+}
+const X = x => pad + x * scale;
+const Y = y => canvas.height - pad - y * scale;   // y up = deeper into room
+
+function mix(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const c = i => Math.round(((pa >> i) & 255) * (1 - t) + ((pb >> i) & 255) * t);
+  return `rgb(${c(16)},${c(8)},${c(0)})`;
+}
+
+function draw() {
+  if (!CFG) return;
+  const W = CFG.room.width, D = CFG.room.depth;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Heatmap (sequential single-hue ramp; near-zero recedes to surface).
+  if ($("showHeat").checked && heat) {
+    const max = Math.max(1e-9, ...heat);
+    const cw = W / heatCols * scale, chh = D / heatRows * scale;
+    for (let r = 0; r < heatRows; r++) for (let c = 0; c < heatCols; c++) {
+      const v = heat[r * heatCols + c];
+      if (v <= 0) continue;
+      const t = Math.pow(v / max, 0.5);
+      ctx.globalAlpha = 0.25 + 0.55 * t;
+      ctx.fillStyle = mix(css("--heat-lo"), css("--heat-hi"), t);
+      ctx.fillRect(X(c * W / heatCols), Y((r + 1) * D / heatRows), cw + .5, chh + .5);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Zone grid (recessive hairlines) + room border.
+  if ($("showGrid").checked) {
+    ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+    for (let c = 1; c < CFG.grid.cols; c++) {
+      ctx.beginPath(); ctx.moveTo(X(c * W / CFG.grid.cols), Y(0));
+      ctx.lineTo(X(c * W / CFG.grid.cols), Y(D)); ctx.stroke();
+    }
+    for (let r = 1; r < CFG.grid.rows; r++) {
+      ctx.beginPath(); ctx.moveTo(X(0), Y(r * D / CFG.grid.rows));
+      ctx.lineTo(X(W), Y(r * D / CFG.grid.rows)); ctx.stroke();
+    }
+    // Zone ids in the corners of cells.
+    ctx.fillStyle = css("--muted"); ctx.font = "10px system-ui";
+    for (let r = 0; r < CFG.grid.rows; r++) for (let c = 0; c < CFG.grid.cols; c++)
+      ctx.fillText(r * CFG.grid.cols + c,
+        X(c * W / CFG.grid.cols) + 4, Y(r * D / CFG.grid.rows) - 4);
+  }
+  ctx.strokeStyle = css("--axis"); ctx.lineWidth = 1.5;
+  ctx.strokeRect(X(0), Y(D), W * scale, D * scale);
+
+  // Highlight predicted zone.
+  if (last && last.zone !== undefined && $("showGrid").checked) {
+    const z = last.zone, r = Math.floor(z / CFG.grid.cols), c = z % CFG.grid.cols;
+    ctx.fillStyle = css("--accent"); ctx.globalAlpha = 0.10;
+    ctx.fillRect(X(c * W / CFG.grid.cols), Y((r + 1) * D / CFG.grid.rows),
+                 W / CFG.grid.cols * scale, D / CFG.grid.rows * scale);
+    ctx.globalAlpha = 1;
+  }
+
+  // Nodes: TX triangle, RX squares — shape + label, not color-alone.
+  ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui";
+  const tx = CFG.tx.pos;
+  ctx.beginPath();
+  ctx.moveTo(X(tx[0]), Y(tx[1]) - 7); ctx.lineTo(X(tx[0]) - 6, Y(tx[1]) + 5);
+  ctx.lineTo(X(tx[0]) + 6, Y(tx[1]) + 5); ctx.closePath(); ctx.fill();
+  ctx.fillText(CFG.tx.id, X(tx[0]) + 8, Y(tx[1]) + 4);
+  for (const rx of CFG.rx) {
+    ctx.fillRect(X(rx.pos[0]) - 5, Y(rx.pos[1]) - 5, 10, 10);
+    ctx.fillText(rx.id, X(rx.pos[0]) + 8, Y(rx.pos[1]) + 4);
+  }
+
+  // Trail (2px line).
+  if ($("showTrail").checked && trail.length > 1) {
+    ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.globalAlpha = 0.6;
+    ctx.beginPath(); ctx.moveTo(X(trail[0][0]), Y(trail[0][1]));
+    for (const [px, py] of trail) ctx.lineTo(X(px), Y(py));
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  if (last) {
+    // Raw estimate: small muted square.
+    if (last.raw_x !== undefined) {
+      ctx.fillStyle = css("--raw");
+      ctx.fillRect(X(last.raw_x) - 3, Y(last.raw_y) - 3, 6, 6);
+    }
+    // Ground truth (sim): cross.
+    if (last.gt_x !== undefined) {
+      ctx.strokeStyle = css("--gt"); ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(X(last.gt_x) - 6, Y(last.gt_y) - 6); ctx.lineTo(X(last.gt_x) + 6, Y(last.gt_y) + 6);
+      ctx.moveTo(X(last.gt_x) + 6, Y(last.gt_y) - 6); ctx.lineTo(X(last.gt_x) - 6, Y(last.gt_y) + 6);
+      ctx.stroke();
+    }
+    // Predicted: accent dot with surface ring.
+    if (last.x !== undefined) {
+      ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), 9, 0, 7);
+      ctx.fillStyle = css("--surface"); ctx.fill();
+      ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), 7, 0, 7);
+      ctx.fillStyle = css("--accent"); ctx.fill();
+    }
+  }
+
+  // Axis labels (metres).
+  ctx.fillStyle = css("--muted"); ctx.font = "10px system-ui";
+  ctx.fillText("0", X(0) - 10, Y(0) + 12);
+  ctx.fillText(W + " m", X(W) - 10, Y(0) + 14);
+  ctx.fillText(D + " m", X(0) - 28, Y(D) + 4);
+}
+
+function onEvent(e) {
+  last = e; count++;
+  if (e.x !== undefined) {
+    trail.push([e.x, e.y]);
+    if (trail.length > 120) trail.shift();
+    const c = Math.min(heatCols - 1, Math.floor(e.x / CFG.room.width * heatCols));
+    const r = Math.min(heatRows - 1, Math.floor(e.y / CFG.room.depth * heatRows));
+    heat[r * heatCols + c] += 1;
+  }
+  const now = performance.now();
+  lastTimes.push(now); while (lastTimes.length > 12) lastTimes.shift();
+
+  $("tZone").textContent = e.zone !== undefined ? e.zone : (e.zone_from_xy ?? "—");
+  $("tPos").textContent = e.x !== undefined ? `${e.x.toFixed(2)}, ${e.y.toFixed(2)} m` : "—";
+  $("tErr").textContent = e.error_m !== undefined ? e.error_m.toFixed(2) + " m" : "n/a";
+  $("tLat").textContent = e.latency_ms.toFixed(0) + " ms";
+  $("tCount").textContent = count;
+  if (lastTimes.length > 3) {
+    const hz = 1000 * (lastTimes.length - 1) / (now - lastTimes[0]);
+    $("tRate").textContent = hz.toFixed(1) + " Hz";
+  }
+  const row = document.createElement("tr");
+  const t = new Date(e.t * 1000).toLocaleTimeString();
+  row.innerHTML = `<td>${t}</td><td>${e.x?.toFixed(2) ?? ""}</td>` +
+    `<td>${e.y?.toFixed(2) ?? ""}</td><td>${e.zone ?? ""}</td>` +
+    `<td>${e.error_m?.toFixed(2) ?? ""}</td>`;
+  const body = $("logBody");
+  body.prepend(row); while (body.rows.length > 8) body.deleteRow(-1);
+  draw();
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
+                           + location.host + "/ws");
+  ws.onopen = () => { $("status").classList.add("live"); $("statusText").textContent = "live"; };
+  ws.onclose = () => {
+    $("status").classList.remove("live"); $("statusText").textContent = "reconnecting…";
+    setTimeout(connect, 1500);
+  };
+  ws.onmessage = m => onEvent(JSON.parse(m.data));
+  setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 15000);
+}
+
+async function init() {
+  CFG = await (await fetch("/api/config")).json();
+  heat = new Float64Array(heatCols * heatRows);
+  $("modePill").textContent = "mode: " + (CFG.mode === "sim" ? "simulated person" : "hardware");
+  $("roomPill").textContent = `room: ${CFG.room.name} (${CFG.room.width}×${CFG.room.depth} m)`;
+  if (CFG.mode === "sim") $("gtLegend").hidden = false;
+  resize(); draw(); connect();
+}
+window.addEventListener("resize", () => { resize(); draw(); });
+$("clearHeat").onclick = () => { heat.fill(0); draw(); };
+for (const id of ["showHeat", "showTrail", "showGrid"]) $(id).onchange = draw;
+init();
+</script>
+</body>
+</html>

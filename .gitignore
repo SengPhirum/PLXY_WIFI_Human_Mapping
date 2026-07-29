@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Generated data — datasets, model bundles, and results are reproducible
+# via scripts/. Keep the directory structure with .gitkeep only.
+data/datasets/
+data/models/
+data/sessions/
+data/results/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
