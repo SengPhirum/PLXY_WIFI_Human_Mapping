@@ -245,6 +245,46 @@ class PresenceDetector:
         }
         self.calibrated = True
 
+    # ------------------------------------------------------- introspection
+
+    def spectrum(self, max_hz: float = 3.0, n_out: int = 48) -> dict:
+        """Current motion spectrum, for the dashboard's spectrum plot.
+
+        Returns frequencies (Hz) and normalized power, plus the analysis
+        band edges so the UI can shade where each feature looks.
+        """
+        x = np.asarray(self.samples, dtype=float)
+        if len(x) < 16:
+            return {"freqs": [], "power": [], "breath_band": [BREATH_LO_HZ, BREATH_HI_HZ],
+                    "motion_band": [MOTION_LO_HZ, MOTION_HI_HZ]}
+        t = np.arange(len(x))
+        x = (x - np.polyval(np.polyfit(t, x, 1), t)) * np.hanning(len(x))
+        ps = np.abs(np.fft.rfft(x)) ** 2
+        freqs = np.fft.rfftfreq(len(x), 1.0 / self.rate_hz)
+        keep = freqs <= max_hz
+        f, p = freqs[keep][:n_out], ps[keep][:n_out]
+        p = p / (p.max() + 1e-12)
+        return {
+            "freqs": [round(float(v), 3) for v in f],
+            "power": [round(float(v), 4) for v in p],
+            "breath_band": [BREATH_LO_HZ, BREATH_HI_HZ],
+            "motion_band": [MOTION_LO_HZ, MOTION_HI_HZ],
+        }
+
+    def histogram(self) -> dict:
+        """RSSI value histogram (1 dB bins) — reveals quantization/dither.
+
+        A healthy link spreads over several levels; a link pinned to one or
+        two levels cannot carry sub-dB breathing modulation at all.
+        """
+        x = np.asarray(self.samples, dtype=float)
+        if len(x) == 0:
+            return {"levels": [], "counts": []}
+        lo, hi = int(np.floor(x.min())), int(np.ceil(x.max()))
+        levels = list(range(lo, hi + 1))
+        counts = [int(np.sum(np.round(x) == lv)) for lv in levels]
+        return {"levels": levels, "counts": counts}
+
     def recalibrate(self) -> None:
         """Restart calibration (call after moving the laptop or router)."""
         self._calib.clear()
@@ -252,6 +292,8 @@ class PresenceDetector:
             v.clear()
         self.calibrated = False
         self._state = "calibrating"
+        self._peaks.clear()
+        self._motion_run = 0
 
     # -------------------------------------------------------------- update
 

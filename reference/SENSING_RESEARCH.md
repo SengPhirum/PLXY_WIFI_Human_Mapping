@@ -138,6 +138,29 @@ detections are being missed; raise it in an interference-heavy environment.
 
 ---
 
+## 4b. Observability — knowing *why* it works or doesn't
+
+Detection quality is worthless if a user cannot tell whether the input is
+sound. Three failure modes account for nearly every "Wi-Fi sensing doesn't
+work" report, and each has a distinct measurable signature
+(`collect/health.py`):
+
+| Failure | Signature | Fix surfaced to the user |
+|---|---|---|
+| Stale RSSI (driver caches the last frame's value) | `stale_fraction` > 0.85 | enable the active probe / ping the router |
+| Quantization-pinned link (too stable, sub-dB modulation lost) | `distinct_levels` ≤ 2 with low std | move further from the AP; prefer 2.4 GHz |
+| Slow sampling (OS call slower than the target rate) | `effective_rate_hz` ≪ target | lower the rate; don't run in a VM |
+| No adapter at all | `interface is None` | run on host OS, not a VM/WSL/container |
+
+`scripts/wifi_diagnose.py` runs these checks in 20 s and prints a verdict
+with the matching fix. The dashboard shows the same metrics continuously,
+alongside the adapter details (`collect/wifi_info.py`: driver, SSID, BSSID,
+channel, band, width, bitrate, TX power, noise, SNR) and the raw evidence —
+the RSSI trace, the motion spectrum with both analysis bands shaded, and
+the RSSI level histogram. A user can therefore see the breathing peak
+appear inside the shaded band, which is what makes the decision legible
+rather than a black box.
+
 ## 5. Honest limits
 
 - These numbers come from **synthetic RSSI**, calibrated to real

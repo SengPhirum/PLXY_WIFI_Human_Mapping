@@ -5,7 +5,7 @@
 > re-deriving anything. Read this first, then `TODO.md` for next actions.
 > Keep this file updated at the end of every working session.
 
-**Last updated:** 2026-07-29 (fifth session)
+**Last updated:** 2026-07-29 (sixth session)
 **State:** Software prototype complete and verified end-to-end on simulated
 data. Three tracks working: (1) localization, (2) real-signal presence
 sensing (laptop RSSI + router multi-device), (3) **pose estimation**
@@ -68,6 +68,16 @@ Full instructions: `docs/SETUP_GUIDE.md`. Codebase map:
   0.4 dB breathing modulation, 0% false alarms at default sensitivity
   1.25 — full tables and sources in `SENSING_RESEARCH.md`. Presence ONLY:
   one link has no position information.
+- **Observability layer** (`collect/wifi_info.py`, `collect/health.py`,
+  `scripts/wifi_diagnose.py`): adapter/driver/SSID/BSSID/channel/band/
+  width/bitrate/TX-power/noise/SNR across Linux (iw + /proc), macOS
+  (airport), Windows (netsh); link-health metrics (effective sample rate,
+  stale-value fraction, distinct dBm levels, std/range, failed reads) that
+  diagnose the three real failure modes — stale driver RSSI, quantization-
+  pinned link, slow sampling — each with a specific fix. Dashboard shows
+  device panel, health verdict, RSSI trace with axes, motion spectrum with
+  breathing/motion bands shaded, RSSI histogram, and per-feature values
+  against learned thresholds.
 - **Pose track** (`simulate/body_model.py`, `models/pose.py`,
   `config/pose.yaml`, `scripts/generate_pose_dataset.py`,
   `scripts/train_pose.py`, server `mode="pose"`, `/body` renderer):
@@ -179,6 +189,17 @@ numbers: link count (3→6: 0.39→0.47) and data volume (4×: 0.47→0.583).
 
 ## Session log
 
+- **2026-07-29 f** (Claude Code): user reported wifi_live still not good and
+  asked to see the Wi-Fi device and signal in detail. Root cause was
+  observability, not the algorithm — nothing showed whether the adapter,
+  the sampling, or the signal was at fault. Added `wifi_info.py` (adapter
+  + link details, 4 platform parsers), `health.py` (sample rate, stale
+  fraction, distinct levels, std/range → verdict + targeted advice),
+  `scripts/wifi_diagnose.py` (20 s check, prints verdict and fixes), and
+  rebuilt the dashboard: device panel, health panel, axis-labelled RSSI
+  trace, motion spectrum with analysis bands shaded, RSSI histogram,
+  per-feature values vs thresholds, per-link list. 64 tests passing;
+  dashboard verified with a stubbed adapter.
 - **2026-07-29 e** (Claude Code): user asked to research and improve human
   detection on the live Wi-Fi mode. Researched device-free RSSI sensing
   (autonomous thresholds, entropy features, RSSI respiration monitoring,

@@ -396,10 +396,15 @@ class RssiMonitor:
     def __init__(self, rate_hz: float = 10.0, interface: str | None = None,
                  active_probe: bool = True, scan_neighbours: bool = True,
                  calibration_s: float = 20.0, sensitivity: float = 1.25):
+        from .health import HealthMonitor
         from .presence import MultiLinkPresence
 
         self.sampler = RssiSampler(interface)
         self.rate_hz = rate_hz
+        self.interface = interface
+        self.health = HealthMonitor(target_rate_hz=rate_hz)
+        self.device: dict = {}
+        self._device_refreshed = 0.0
         self.presence = MultiLinkPresence(rate_hz=rate_hz,
                                           calibration_s=calibration_s,
                                           sensitivity=sensitivity)
@@ -416,23 +421,51 @@ class RssiMonitor:
 
     # ------------------------------------------------------------- threads
 
+    def _refresh_device(self, now: float) -> None:
+        """Adapter/link details are slow to query — refresh every 5 s."""
+        if now - self._device_refreshed < 5.0:
+            return
+        from .wifi_info import get_wifi_info
+
+        self._device_refreshed = now
+        try:
+            self.device = get_wifi_info(self.interface).to_dict()
+        except Exception:
+            self.device = {}
+
     def _sample_loop(self) -> None:
         period = 1.0 / self.rate_hz
+        n = 0
         while not self._stop.is_set():
             t0 = time.time()
             rssi = self.sampler.sample()
+            self.health.record(rssi, t0)
+            self._refresh_device(t0)
             if rssi is not None:
                 self.presence.update("connected", rssi, t0)
                 level, moving = self.detector.update(rssi, t0)
                 room = self.presence.room_state()
-                self._latest = {
+                event = {
                     "t": t0,
                     "rssi": rssi,
                     "motion": level,               # legacy baseline fields
                     "presence": moving,
                     "probe_active": self.probe_active,
+                    "device": self.device,
                     **room,
                 }
+                # Spectrum/histogram/health are heavier and change slowly —
+                # attach them a few times a second, not on every sample.
+                n += 1
+                if n % max(1, int(self.rate_hz // 2)) == 0:
+                    det = self.presence.detectors.get("connected")
+                    event["health"] = self.health.snapshot(self.probe_active).to_dict()
+                    if det is not None:
+                        event["spectrum"] = det.spectrum()
+                        event["histogram"] = det.histogram()
+                        event["thresholds"] = {k: round(v, 3)
+                                               for k, v in det.thresholds.items()}
+                self._latest = event
             time.sleep(max(0.0, period - (time.time() - t0)))
 
     def _scan_loop(self) -> None:

@@ -112,7 +112,23 @@ the demo against the real signal of the currently associated access point:
 python scripts/wifi_live.py        # → dashboard + /body in real-signal mode
 ```
 
-It samples the connected link's RSSI at 10 Hz (Linux
+**Run the diagnostic first** — it tells you in 20 seconds whether your
+machine can do this at all, and if not, exactly what to change:
+
+```bash
+python scripts/wifi_diagnose.py
+```
+
+It reports the adapter and driver, the associated link (SSID, BSSID,
+channel, band, bitrate, TX power, noise, SNR), then measures the RSSI
+stream — effective sample rate, how often the driver repeats a cached
+value, how many distinct dBm levels appear, and the signal spread — and
+ends with a verdict (`healthy` / `degraded` / `no usable signal`) plus
+specific fixes. Most "it doesn't work" cases are visible here immediately:
+a VM with no wireless adapter, a driver returning stale RSSI, or a link so
+stable that sub-dB variation is quantized away.
+
+`wifi_live.py` samples the connected link's RSSI at 10 Hz (Linux
 `/proc/net/wireless`/`iw`, macOS `airport`, Windows `netsh`) and reports
 **three states**:
 
@@ -143,6 +159,19 @@ different part of the building.
 Useful flags: `--sensitivity 1.0` (detect weaker signals, more false
 alarms), `--no-probe` (don't generate traffic), `--no-scan` (connected link
 only), `--calibration 30`.
+
+**What the dashboard shows.** Everything the detector is working from is on
+screen, so you can see *why* it decides what it decides:
+
+| Panel | What it tells you |
+|---|---|
+| Live RSSI trace | the raw signal, with a labelled dBm axis over the last 30 s |
+| Motion spectrum | the frequency content, with the **breathing band** (0.16–0.6 Hz) and **motion band** (0.8–3 Hz) shaded — a still person shows a clear peak inside the blue band |
+| RSSI histogram | how many distinct dBm levels the driver reports. One or two levels means the link is quantization-pinned and sub-dB breathing is unrecoverable |
+| Feature table | each feature's live value against its own learned threshold, with a marker at the threshold — shows which one is driving the decision |
+| Wi-Fi device | adapter, driver, SSID, BSSID, channel, band, frequency, width, bitrate, TX power, noise, SNR |
+| Link health | verdict, effective sample rate, repeated-value fraction, distinct levels, RSSI std and range, probe status, plus any issues and fixes |
+| Sensing links | the connected AP and every neighbouring AP being used, each with signal strength and its own state |
 
 Measured performance, tuning, and the research this is based on:
 **[../reference/SENSING_RESEARCH.md](../reference/SENSING_RESEARCH.md)** —

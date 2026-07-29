@@ -63,6 +63,17 @@
   td { padding: 4px 6px; border-bottom: 1px solid var(--grid);
     color: var(--ink-2); font-variant-numeric: tabular-nums; }
   h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 8px; }
+  .plotlabel { font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .04em; margin: 10px 0 4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere; }
+  .verdict { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .issue { font-size: 12px; color: var(--ink-2); margin-top: 6px; padding-left: 14px;
+    text-indent: -14px; }
 </style>
 </head>
 <body>
@@ -93,13 +104,21 @@
       <span class="pill" id="linksPill">links <b id="linksVal">1</b></span>
       <button id="recalBtn" style="margin-left:auto">recalibrate</button>
     </div>
-    <canvas id="spark" width="860" height="200" aria-label="Live RSSI"></canvas>
-    <div class="legend">
-      <span><span class="sw" style="background:var(--accent)"></span> RSSI (dBm)</span>
-      <span id="probePill" class="pill">probe —</span>
+    <div class="plotlabel">Live RSSI (dBm)</div>
+    <canvas id="spark" width="860" height="190" aria-label="Live RSSI trace"></canvas>
+    <div class="grid2">
+      <div>
+        <div class="plotlabel">Motion spectrum — shaded: <span style="color:var(--accent)">breathing band</span>,
+          <span style="color:var(--muted)">motion band</span></div>
+        <canvas id="spectrum" width="420" height="150" aria-label="RSSI spectrum"></canvas>
+      </div>
+      <div>
+        <div class="plotlabel">RSSI level histogram (1 dB bins)</div>
+        <canvas id="hist" width="420" height="150" aria-label="RSSI histogram"></canvas>
+      </div>
     </div>
-    <table style="margin-top:10px" aria-label="Detection features">
-      <thead><tr><th>feature</th><th>value</th><th>vs threshold</th></tr></thead>
+    <table style="margin-top:12px" aria-label="Detection features">
+      <thead><tr><th>feature</th><th>value</th><th>threshold</th><th></th></tr></thead>
       <tbody id="featBody"></tbody>
     </table>
     <div class="controls" style="color:var(--muted); font-size:12px">
@@ -143,6 +162,20 @@
         <thead><tr><th>t</th><th>x (m)</th><th>y (m)</th><th>zone</th><th>err (m)</th></tr></thead>
         <tbody id="logBody"></tbody>
       </table>
+    </div>
+    <div class="card" id="deviceCard" hidden>
+      <h2>Wi-Fi device</h2>
+      <dl class="kv" id="deviceKv"></dl>
+    </div>
+    <div class="card" id="healthCard" hidden>
+      <h2>Link health</h2>
+      <div class="verdict" id="healthVerdict">—</div>
+      <dl class="kv" id="healthKv" style="margin-top:8px"></dl>
+      <div id="healthIssues"></div>
+    </div>
+    <div class="card" id="apCard" hidden>
+      <h2>Sensing links</h2>
+      <table aria-label="Links"><tbody id="apBody"></tbody></table>
     </div>
     <div class="card" id="stationsCard" hidden>
       <h2>Connected devices (router links)</h2>
@@ -365,31 +398,167 @@ function onRouterEvent(e) {
   drawRouterMap();
 }
 
-// ---- real-Wi-Fi (RSSI) mode: live signal sparkline -------------------
+// ---- real-Wi-Fi (RSSI) mode -----------------------------------------
 const rssiHist = [];
+const HIST_N = 300;                                  // ~30 s @ 10 Hz
+let lastThresholds = null;   // thresholds arrive with the periodic detail
+
+function drawTrace() {
+  const c = $("spark"), g = c.getContext("2d");
+  const PADL = 44, PADR = 8, PADT = 8, PADB = 18;
+  g.clearRect(0, 0, c.width, c.height);
+  if (rssiHist.length < 2) return;
+  let lo = Math.min(...rssiHist), hi = Math.max(...rssiHist);
+  if (hi - lo < 3) { const m = (hi + lo) / 2; lo = m - 1.5; hi = m + 1.5; }
+  lo = Math.floor(lo) - 1; hi = Math.ceil(hi) + 1;
+  const X = i => PADL + i / (HIST_N - 1) * (c.width - PADL - PADR);
+  const Y = v => PADT + (hi - v) / (hi - lo) * (c.height - PADT - PADB);
+
+  // Gridlines at whole dBm, labelled.
+  g.font = "10px system-ui"; g.textAlign = "right";
+  const step = Math.max(1, Math.round((hi - lo) / 5));
+  for (let v = lo; v <= hi; v += step) {
+    g.strokeStyle = css("--grid"); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(PADL, Y(v)); g.lineTo(c.width - PADR, Y(v)); g.stroke();
+    g.fillStyle = css("--muted"); g.fillText(v.toFixed(0), PADL - 6, Y(v) + 3);
+  }
+  g.textAlign = "start";
+  g.fillStyle = css("--muted");
+  g.fillText("-30 s", PADL, c.height - 5);
+  g.textAlign = "end"; g.fillText("now", c.width - PADR, c.height - 5);
+  g.textAlign = "start";
+
+  g.strokeStyle = css("--accent"); g.lineWidth = 2;
+  g.beginPath();
+  const off = HIST_N - rssiHist.length;
+  rssiHist.forEach((v, i) => (i ? g.lineTo(X(i + off), Y(v)) : g.moveTo(X(i + off), Y(v))));
+  g.stroke();
+}
+
+function drawSpectrum(spec) {
+  const c = $("spectrum"), g = c.getContext("2d");
+  const PADL = 30, PADB = 16, PADT = 6, PADR = 6;
+  g.clearRect(0, 0, c.width, c.height);
+  if (!spec || !spec.freqs.length) return;
+  const fMax = spec.freqs[spec.freqs.length - 1];
+  const X = f => PADL + f / fMax * (c.width - PADL - PADR);
+  const Y = p => PADT + (1 - p) * (c.height - PADT - PADB);
+
+  // Shade the analysis bands so the detector's logic is visible.
+  const shade = (band, colour, alpha) => {
+    g.fillStyle = colour; g.globalAlpha = alpha;
+    g.fillRect(X(band[0]), PADT, X(band[1]) - X(band[0]), c.height - PADT - PADB);
+    g.globalAlpha = 1;
+  };
+  shade(spec.motion_band, css("--muted"), 0.15);
+  shade(spec.breath_band, css("--accent"), 0.16);
+
+  g.strokeStyle = css("--grid"); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(PADL, Y(0)); g.lineTo(c.width - PADR, Y(0)); g.stroke();
+
+  g.strokeStyle = css("--ink-2"); g.lineWidth = 1.5;
+  g.beginPath();
+  spec.freqs.forEach((f, i) => (i ? g.lineTo(X(f), Y(spec.power[i]))
+                                  : g.moveTo(X(f), Y(spec.power[i]))));
+  g.stroke();
+
+  g.fillStyle = css("--muted"); g.font = "10px system-ui";
+  for (const f of [0, 1, 2, 3].filter(v => v <= fMax)) {
+    g.fillText(f + " Hz", X(f) - 8, c.height - 4);
+  }
+}
+
+function drawHistogram(h) {
+  const c = $("hist"), g = c.getContext("2d");
+  const PADL = 30, PADB = 16, PADT = 6, PADR = 6;
+  g.clearRect(0, 0, c.width, c.height);
+  if (!h || !h.levels.length) return;
+  const max = Math.max(...h.counts) || 1;
+  const bw = (c.width - PADL - PADR) / h.levels.length;
+  h.levels.forEach((lv, i) => {
+    const hgt = h.counts[i] / max * (c.height - PADT - PADB);
+    g.fillStyle = css("--accent");
+    // 2 px surface gap between bars.
+    g.fillRect(PADL + i * bw + 1, c.height - PADB - hgt, Math.max(1, bw - 2), hgt);
+  });
+  g.fillStyle = css("--muted"); g.font = "10px system-ui";
+  g.fillText(h.levels[0] + " dBm", PADL, c.height - 4);
+  g.textAlign = "end";
+  g.fillText(h.levels[h.levels.length - 1] + " dBm", c.width - PADR, c.height - 4);
+  g.textAlign = "start";
+  g.fillText(h.levels.length + " level" + (h.levels.length === 1 ? "" : "s"), PADL, 12);
+}
+
+function renderDevice(d) {
+  if (!d || !d.interface) return;
+  $("deviceCard").hidden = false;
+  const rows = [
+    ["adapter", d.interface + (d.driver ? ` (${d.driver})` : "")],
+    ["SSID", d.ssid], ["BSSID", d.bssid],
+    ["channel", d.channel ? `${d.channel} · ${d.band || ""}` : null],
+    ["frequency", d.freq_mhz ? `${d.freq_mhz.toFixed(0)} MHz` : null],
+    ["width", d.width_mhz ? `${d.width_mhz} MHz` : null],
+    ["bitrate", d.bitrate_mbps ? `${d.bitrate_mbps.toFixed(0)} Mbps` : null],
+    ["TX power", d.tx_power_dbm ? `${d.tx_power_dbm.toFixed(0)} dBm` : null],
+    ["noise", d.noise_dbm != null ? `${d.noise_dbm.toFixed(0)} dBm` : null],
+    ["SNR", d.snr_db != null ? `${d.snr_db} dB` : null],
+  ].filter(([, v]) => v != null && v !== "");
+  $("deviceKv").innerHTML = rows.map(([k, v]) =>
+    `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+
+function renderHealth(h, probeActive) {
+  if (!h) return;
+  $("healthCard").hidden = false;
+  const UI = { good: ["●", "var(--good)", "healthy"],
+               degraded: ["●", "#fab219", "degraded"],
+               dead: ["●", "var(--critical)", "no usable signal"],
+               unknown: ["●", "var(--muted)", "measuring…"] };
+  const [dot, colour, text] = UI[h.verdict] || UI.unknown;
+  $("healthVerdict").innerHTML =
+    `<span style="color:${colour}">${dot}</span> ${text}`;
+  $("healthKv").innerHTML = [
+    ["sample rate", `${h.effective_rate_hz.toFixed(1)} Hz / ${h.target_rate_hz.toFixed(0)}`],
+    ["repeated values", `${(h.stale_fraction * 100).toFixed(0)}%`],
+    ["distinct levels", h.distinct_levels],
+    ["RSSI std", `${h.rssi_std.toFixed(2)} dB`],
+    ["range", h.rssi_min != null ? `${h.rssi_min.toFixed(0)} … ${h.rssi_max.toFixed(0)} dBm` : "—"],
+    ["active probe", probeActive ? "on" : "off"],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("healthIssues").innerHTML = [...h.issues.map(i => `— ${i}`),
+                                 ...h.advice.map(a => `→ ${a}`)]
+    .map(t => `<div class="issue">${t}</div>`).join("");
+}
+
+function renderLinks(links) {
+  const entries = Object.entries(links || {});
+  if (!entries.length) return;
+  $("apCard").hidden = false;
+  const STATE_SHORT = { motion: "moving", stationary: "still",
+                        empty: "empty", calibrating: "calib" };
+  $("apBody").innerHTML = entries.map(([id, s]) => {
+    const name = id === "connected" ? "connected AP" : id.replace("ap:", "");
+    const bar = Math.max(0, Math.min(100, (s.rssi + 95) * 1.8));
+    return `<tr><td style="white-space:nowrap">${name}</td>`
+      + `<td style="white-space:nowrap">${s.rssi.toFixed(0)} dBm</td>`
+      + `<td style="width:100%"><div style="background:var(--grid);border-radius:3px;height:8px">`
+      + `<div style="width:${bar.toFixed(0)}%;height:8px;border-radius:3px;`
+      + `background:${s.state === "empty" || s.state === "calibrating"
+                      ? "var(--muted)" : "var(--accent)"}"></div></div></td>`
+      + `<td>${STATE_SHORT[s.state] || s.state}</td></tr>`;
+  }).join("");
+}
+
 function onRssiEvent(e) {
   count++;
   rssiHist.push(e.rssi);
-  while (rssiHist.length > 300) rssiHist.shift();   // ~30 s @ 10 Hz
-  const c = $("spark"), g = c.getContext("2d");
-  g.clearRect(0, 0, c.width, c.height);
-  const lo = Math.min(...rssiHist) - 2, hi = Math.max(...rssiHist) + 2;
-  g.strokeStyle = css("--grid");
-  g.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    g.beginPath(); g.moveTo(0, c.height*i/4); g.lineTo(c.width, c.height*i/4); g.stroke();
-  }
-  g.strokeStyle = css("--accent"); g.lineWidth = 2;
-  g.beginPath();
-  rssiHist.forEach((v, i) => {
-    const x = i / 299 * c.width;
-    const y = c.height - (v - lo) / (hi - lo) * (c.height - 20) - 10;
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  });
-  g.stroke();
-  g.fillStyle = css("--muted"); g.font = "11px system-ui";
-  g.fillText(hi.toFixed(0) + " dBm", 6, 14);
-  g.fillText(lo.toFixed(0) + " dBm", 6, c.height - 6);
+  while (rssiHist.length > HIST_N) rssiHist.shift();
+  drawTrace();
+  if (e.spectrum) drawSpectrum(e.spectrum);
+  if (e.histogram) drawHistogram(e.histogram);
+  if (e.device) renderDevice(e.device);
+  if (e.health) renderHealth(e.health, e.probe_active);
+  renderLinks(e.links);
 
   // Room state badge.
   const STATE_UI = {
@@ -412,23 +581,32 @@ function onRssiEvent(e) {
   $("bpmPill").hidden = !e.breathing_bpm;
   if (e.breathing_bpm) $("bpmVal").textContent = e.breathing_bpm.toFixed(0);
   $("linksVal").textContent = e.n_links || 1;
-  $("probePill").textContent = e.probe_active
-    ? "active probe on" : "active probe off";
 
-  // Per-feature detail for the connected link.
+  // Per-feature detail for the connected link, each against its own
+  // learned threshold so it is clear which one is driving the decision.
   const link = (e.links || {}).connected;
   if (link) {
+    if (e.thresholds) lastThresholds = e.thresholds;
+    const th = lastThresholds || {};
     const rows = [
-      ["motion (0.8–3 Hz)", link.motion, "dB"],
-      ["breathing SNR", link.breathing, ""],
-      ["shadowing", link.shadow, "dB"],
-      ["entropy", link.entropy, "bits"],
+      ["motion (0.8–3 Hz)", link.motion, th.motion, "dB"],
+      ["breathing SNR", link.breathing, th.breathing, ""],
+      ["shadowing", link.shadow, th.shadow, "dB"],
+      ["entropy", link.entropy, th.entropy, "bits"],
     ];
-    $("featBody").innerHTML = rows.map(([name, v, unit]) =>
-      `<tr><td>${name}</td><td>${v.toFixed(2)} ${unit}</td>`
-      + `<td><div style="background:var(--grid);border-radius:3px;width:90px;height:8px">`
-      + `<div style="width:${Math.min(100, v * 25).toFixed(0)}%;height:8px;`
-      + `border-radius:3px;background:var(--accent)"></div></div></td></tr>`).join("");
+    $("featBody").innerHTML = rows.map(([name, v, t, unit]) => {
+      const over = t != null && v > t;
+      const pct = t ? Math.min(100, v / t * 50) : Math.min(100, v * 25);
+      return `<tr><td style="white-space:nowrap">${name}</td>`
+        + `<td style="white-space:nowrap;color:${over ? "var(--accent)" : "var(--ink-2)"}">`
+        + `${v.toFixed(2)} ${unit}</td>`
+        + `<td style="white-space:nowrap">${t != null ? t.toFixed(2) : "—"}</td>`
+        + `<td style="width:100%"><div style="background:var(--grid);border-radius:3px;height:8px;position:relative">`
+        + `<div style="width:${pct.toFixed(0)}%;height:8px;border-radius:3px;`
+        + `background:${over ? "var(--accent)" : "var(--muted)"}"></div>`
+        + `<div style="position:absolute;left:50%;top:-2px;width:1px;height:12px;`
+        + `background:var(--ink-2)"></div></div></td></tr>`;
+    }).join("");
   }
 
   $("tZone").textContent = shortLabel;

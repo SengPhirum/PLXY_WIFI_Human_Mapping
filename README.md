@@ -46,12 +46,18 @@ and **[docs/POSE_GUIDE.md](docs/POSE_GUIDE.md)**.
 
 **Real signal, today, no ESP32:**
 
+- `python scripts/wifi_diagnose.py` — **run this first.** Reports your
+  adapter, driver, link details, and whether the RSSI stream is actually
+  usable, with a verdict and specific fixes.
 - `python scripts/wifi_live.py` — **human detection** on the laptop's own
   connected-link RSSI: reports *empty* / *person present (still)* /
   *person moving*, plus an estimated breathing rate. Detecting a motionless
   person works by finding the respiration peak (0.16–0.6 Hz) in the RSSI
-  spectrum; thresholds calibrate themselves from a quiet-room window.
-  Details and measured performance:
+  spectrum; thresholds calibrate themselves from a quiet-room window. The
+  dashboard shows the adapter and link details, live RSSI trace, motion
+  spectrum with the analysis bands shaded, RSSI level histogram, per-feature
+  values against their thresholds, and link-health diagnosis. Details and
+  measured performance:
   [reference/SENSING_RESEARCH.md](reference/SENSING_RESEARCH.md).
 - `python scripts/router_live.py` — **whole-home mode**: polls the router
   for the RSSI of *every* connected device and maps per-link motion onto
