@@ -28,16 +28,19 @@
   .pill .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     background: var(--critical); margin-right: 6px; }
   .pill.live .dot { background: var(--good); }
-  .note { font-size: 12px; color: var(--muted); margin: 8px 2px 0; max-width: 900px; }
-  .stack { display: flex; flex-direction: column; gap: 4px; max-width: 940px; }
+  .note { font-size: 12px; color: var(--muted); margin: 10px 2px 0; max-width: 940px; }
+  .layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .stack { display: flex; flex-direction: column; gap: 4px;
+           flex: 1 1 560px; max-width: 940px; }
   canvas { display: block; width: 100%; border-radius: 8px; }
   #top { background: #e8e6e1; }
   #bottom { background: #000; }
   .hud {
-    position: fixed; right: 18px; top: 60px; background: var(--surface);
-    border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
-    font-size: 12px; color: var(--ink-2); min-width: 150px;
+    flex: 0 1 250px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    font-size: 12px; color: var(--ink-2); min-width: 210px;
   }
+  .hud > div { margin-bottom: 3px; }
   .hud b { color: var(--ink); font-size: 15px; }
 </style>
 </head>
@@ -48,6 +51,7 @@
   <span class="pill" id="modePill">mode: —</span>
   <span class="pill"><a href="/">← floor-plan dashboard</a></span>
 </header>
+<div class="layout">
 <div class="stack">
   <canvas id="top" width="940" height="430"></canvas>
   <canvas id="bottom" width="940" height="430"></canvas>
@@ -58,6 +62,19 @@
   <div>speed <b id="hSpd">—</b></div>
   <div id="hRssiRow" hidden>rssi <b id="hRssi">—</b></div>
   <div id="hMotionRow" hidden>motion <b id="hMotion">—</b></div>
+  <div id="hPostureRow" hidden>posture <b id="hPosture">—</b>
+    <span style="opacity:.7">conf <b id="hConf">—</b></span></div>
+  <div id="hMpjpeRow" hidden>joint error <b id="hMpjpe">—</b></div>
+  <div id="probPanel" hidden style="margin-top:10px">
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;
+                letter-spacing:.04em;margin-bottom:4px">posture probabilities</div>
+    <table id="probTable" style="width:100%;border-collapse:collapse"></table>
+  </div>
+  <div id="gtToggle" hidden style="margin-top:8px">
+    <label style="cursor:pointer"><input type="checkbox" id="showGt" checked>
+      show ground-truth skeleton</label>
+  </div>
+</div>
 </div>
 <p class="note" id="noteText">
   Avatar visualization of the live localization output: the wireframe figure
@@ -149,6 +166,55 @@ function limb(p0, p1, r0, r1, nRing = 4, nLon = 6) {
   return lines.concat(longs);
 }
 
+// ------------------------------------------------- skeleton-driven mesh
+// Joint order must match src/wifi_mapping/simulate/body_model.py JOINTS.
+const J = {head:0, neck:1, r_sh:2, r_el:3, r_wr:4, l_sh:5, l_el:6, l_wr:7,
+           r_hip:8, r_kn:9, r_an:10, l_hip:11, l_kn:12, l_an:13};
+
+/** Build a wireframe mesh around a predicted 14-joint skeleton.
+ *  jl: (14,3) local-frame joints; returns world polylines. */
+function buildBodyFromJoints(jl, pos, heading) {
+  const c = Math.cos(heading), s = Math.sin(heading);
+  const W = p => [pos[0] + p[0]*c - p[1]*s, pos[1] + p[0]*s + p[1]*c, p[2]];
+  const lines = [];
+  const put = ls => ls.forEach(l => lines.push(l.map(W)));
+  const g = i => jl[i];
+
+  const midHip = mul(add(g(J.r_hip), g(J.l_hip)), 0.5);
+  const midSh  = mul(add(g(J.r_sh),  g(J.l_sh)),  0.5);
+  const torsoLen = Math.hypot(...sub(midSh, midHip));
+
+  // Head + torso volumes centred on the skeleton.
+  const headC = add(g(J.head), [0, 0, 0.06]);
+  put(ellipsoid(headC, 0.105, 0.12, 0.13, 6, 8, 0));
+  put(ellipsoid(mul(add(midSh, midHip), 0.5), 0.175, 0.115,
+                Math.max(0.12, torsoLen * 0.55), 8, 10, 0));
+  put(ellipsoid(midHip, 0.155, 0.105, 0.12, 4, 8, 0));
+  put(limb(midSh, g(J.neck), 0.07, 0.055, 2, 6));
+
+  // Limbs follow the predicted joints directly.
+  put(limb(g(J.r_sh), g(J.r_el), 0.055, 0.042));
+  put(limb(g(J.r_el), g(J.r_wr), 0.042, 0.033));
+  put(limb(g(J.l_sh), g(J.l_el), 0.055, 0.042));
+  put(limb(g(J.l_el), g(J.l_wr), 0.042, 0.033));
+  put(limb(g(J.r_hip), g(J.r_kn), 0.075, 0.055));
+  put(limb(g(J.r_kn), g(J.r_an), 0.055, 0.042));
+  put(limb(g(J.l_hip), g(J.l_kn), 0.075, 0.055));
+  put(limb(g(J.l_kn), g(J.l_an), 0.055, 0.042));
+  return lines;
+}
+
+/** Thin stick figure — used for the ground-truth overlay. */
+function buildSkeletonLines(jl, pos, heading) {
+  const c = Math.cos(heading), s = Math.sin(heading);
+  const W = p => [pos[0] + p[0]*c - p[1]*s, pos[1] + p[0]*s + p[1]*c, p[2]];
+  const E = [[J.head,J.neck],[J.neck,J.r_sh],[J.neck,J.l_sh],
+             [J.r_sh,J.r_el],[J.r_el,J.r_wr],[J.l_sh,J.l_el],[J.l_el,J.l_wr],
+             [J.neck,J.r_hip],[J.neck,J.l_hip],[J.r_hip,J.l_hip],
+             [J.r_hip,J.r_kn],[J.r_kn,J.r_an],[J.l_hip,J.l_kn],[J.l_kn,J.l_an]];
+  return E.map(([a, b]) => [W(jl[a]), W(jl[b])]);
+}
+
 // -------------------------------------------------------------- the body
 // Local frame: x lateral (right+), y forward, z up. Returns world polylines.
 function buildBody(pos, heading, phase, swing) {
@@ -195,14 +261,22 @@ const tctx = topC.getContext("2d"), bctx = botC.getContext("2d");
 // Live state, smoothed for animation.
 const st = { x: 2.5, y: 3.0, tx: 2.5, ty: 3.0, heading: 0, phase: 0,
              speed: 0, swing: 0, mode: null, zone: null, err: null,
-             rssi: null, motion: 0, presence: true, last: performance.now() };
+             rssi: null, motion: 0, presence: true, last: performance.now(),
+             joints: null, gtJoints: null };
 
 function drawScene(ctx, canvas, dark) {
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-  const eye = [CFG.room.width/2, -3.6, 1.9];
-  const target = [CFG.room.width/2, CFG.room.depth*0.42, 1.0];
-  const cam = makeCamera(eye, target, h * 1.35, w/2, h*0.46);
+  // Follow camera: sits a fixed distance in front of the subject so the
+  // figure keeps a constant, legible size wherever they walk. Falls back
+  // to a room-wide view before the first prediction arrives.
+  const eye = st.joints
+    ? [st.x, st.y - 3.6, 1.55]
+    : [CFG.room.width/2, -3.6, 1.9];
+  const target = st.joints
+    ? [st.x, st.y, 0.95]
+    : [CFG.room.width/2, CFG.room.depth*0.42, 1.0];
+  const cam = makeCamera(eye, target, h * 1.25, w/2, h*0.52);
 
   if (!dark) {  // room: floor grid + back wall edge, recessive
     ctx.lineWidth = 1; ctx.strokeStyle = "rgba(80,78,72,0.28)";
@@ -229,7 +303,9 @@ function drawScene(ctx, canvas, dark) {
     return;
   }
 
-  const lines = buildBody([st.x, st.y, 0], st.heading, st.phase, st.swing);
+  const lines = st.joints
+    ? buildBodyFromJoints(st.joints, [st.x, st.y, 0], st.heading)
+    : buildBody([st.x, st.y, 0], st.heading, st.phase, st.swing);
   const alpha = st.mode === "rssi"
     ? 0.35 + 0.65 * Math.min(1, st.motion / 2.5) : 1.0;
   ctx.lineWidth = 1.4;
@@ -249,6 +325,31 @@ function drawScene(ctx, canvas, dark) {
     for (const p of pts) ctx.lineTo(p.x, p.y);
     ctx.stroke();
   }
+  // Ground-truth skeleton overlay (pose mode): drawn on top of the mesh so
+  // the offset between truth and prediction is the visible joint error.
+  if (st.gtJoints && $("showGt") && $("showGt").checked) {
+    const segs = buildSkeletonLines(st.gtJoints, [st.x, st.y, 0], st.heading);
+    for (const pass of [0, 1]) {
+      // Pass 0 lays a surface-coloured halo so the line reads over the mesh.
+      ctx.strokeStyle = pass === 0
+        ? (dark ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.8)")
+        : (dark ? "#ffffff" : "#0b0b0b");
+      ctx.lineWidth = pass === 0 ? 5 : 2;
+      ctx.setLineDash(pass === 0 ? [] : [5, 4]);
+      for (const seg of segs) {
+        const p = cam(seg[0]), q = cam(seg[1]);
+        if (p && q) { ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+      }
+    }
+    ctx.setLineDash([]);
+    // Joint dots at the truth positions.
+    ctx.fillStyle = dark ? "#ffffff" : "#0b0b0b";
+    for (const seg of segs) {
+      const p = cam(seg[0]);
+      if (p) { ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, 7); ctx.fill(); }
+    }
+  }
+
   // Ground shadow.
   const gp = cam([st.x, st.y, 0.01]);
   if (gp) {
@@ -269,8 +370,12 @@ function animate() {
   st.x += dx * k; st.y += dy * k;
   const v = dist * 2.2;                       // implied speed (m/s)
   st.speed += (v - st.speed) * 0.12;
-  if (dist > 0.03) {
-    const targetHeading = Math.atan2(dy, dx) - Math.PI/2;
+  // Pose mode broadcasts the body's true heading; otherwise infer it from
+  // the direction of travel.
+  const headingTarget = st.headingTarget !== undefined
+    ? st.headingTarget : (dist > 0.03 ? Math.atan2(dy, dx) - Math.PI/2 : null);
+  if (headingTarget !== null) {
+    const targetHeading = headingTarget;
     let dh = targetHeading - st.heading;
     while (dh > Math.PI) dh -= 2*Math.PI;
     while (dh < -Math.PI) dh += 2*Math.PI;
@@ -287,6 +392,41 @@ function animate() {
 // ------------------------------------------------------------------ live
 function onEvent(e) {
   st.mode = e.mode;
+  if (e.mode === "pose") {
+    $("modePill").textContent = "mode: pose estimation (simulated body)";
+    if (e.joints) st.joints = e.joints;
+    if (e.gt_joints) st.gtJoints = e.gt_joints;
+    if (e.root) { st.tx = e.root[0]; st.ty = e.root[1]; }
+    if (e.heading !== undefined) st.headingTarget = e.heading;
+    $("hPostureRow").hidden = false; $("hMpjpeRow").hidden = false;
+    $("hPosture").textContent = e.posture
+      + (e.gt_posture ? (e.posture === e.gt_posture ? " ✓" : ` (true: ${e.gt_posture})`) : "");
+    $("hConf").textContent = e.posture_confidence !== undefined
+      ? (e.posture_confidence * 100).toFixed(0) + "%" : "—";
+    $("hMpjpe").textContent = e.mpjpe_cm !== undefined
+      ? e.mpjpe_cm.toFixed(1) + " cm" : "—";
+    $("hPos").textContent = e.root
+      ? `${e.root[0].toFixed(2)}, ${e.root[1].toFixed(2)} m` : "—";
+    $("hZone").textContent = "—";
+    $("hSpd").textContent = e.latency_ms.toFixed(0) + " ms";
+    if (e.posture_proba) {
+      $("probPanel").hidden = false;
+      const rows = Object.entries(e.posture_proba)
+        .sort((a, b) => b[1] - a[1]);
+      $("probTable").innerHTML = rows.map(([name, p]) => {
+        const isTruth = name === e.gt_posture;
+        return `<tr><td style="padding:1px 6px 1px 0;white-space:nowrap;
+            color:${isTruth ? "var(--ink)" : "var(--ink-2)"}">`
+          + `${name}${isTruth ? " ●" : ""}</td>`
+          + `<td style="width:100%"><div style="background:rgba(255,255,255,.12);
+             border-radius:3px;height:7px"><div style="width:${(p*100).toFixed(0)}%;
+             height:7px;border-radius:3px;background:#3987e5"></div></div></td>`
+          + `<td style="padding-left:6px;font-variant-numeric:tabular-nums">`
+          + `${(p*100).toFixed(0)}%</td></tr>`;
+      }).join("");
+    }
+    return;
+  }
   $("modePill").textContent = "mode: " + (e.mode === "sim" ? "simulated person"
     : e.mode === "rssi" ? "real Wi-Fi (this device)"
     : e.mode === "router" ? "real Wi-Fi (router)" : "hardware");
@@ -336,6 +476,18 @@ function connect() {
 
 async function init() {
   CFG = await (await fetch("/api/config")).json();
+  if (CFG.mode === "pose") {
+    $("gtToggle").hidden = false;
+    $("noteText").innerHTML = "<b>Pose estimation from CSI.</b> The solid "
+      + "wireframe mesh is built around the <em>predicted</em> 14-joint "
+      + "skeleton — posture class and joint positions are regressed from "
+      + "Wi-Fi channel state alone. The dashed figure is the ground-truth "
+      + "skeleton of the simulated body, so the gap between them is the live "
+      + "joint error. Trained and evaluated on simulated CSI: this validates "
+      + "the pipeline and reproduces the qualitative findings of "
+      + "DensePose-from-WiFi (CMU) at simulator fidelity — real-CSI accuracy "
+      + "requires the hardware capture campaign (see reference/POSE_FROM_WIFI.md).";
+  }
   if (CFG.mode === "rssi") {
     $("noteText").innerHTML = "Real-signal mode: the RSSI of this machine's "
       + "connected Wi-Fi link drives the motion meter — walk between the "

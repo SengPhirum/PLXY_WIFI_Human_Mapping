@@ -5,11 +5,12 @@
 > re-deriving anything. Read this first, then `TODO.md` for next actions.
 > Keep this file updated at the end of every working session.
 
-**Last updated:** 2026-07-29 (third session)
+**Last updated:** 2026-07-29 (fourth session)
 **State:** Software prototype complete and verified end-to-end on simulated
-data; real-signal modes added: single-link laptop RSSI, and router-based
-multi-device sensing (per-link activity map). No CSI hardware yet (per plan
-timeline, purchase is month 3).
+data. Three tracks working: (1) localization, (2) real-signal presence
+sensing (laptop RSSI + router multi-device), (3) **pose estimation**
+(posture + 14-joint skeleton, live wireframe view). No CSI hardware yet
+(per plan timeline, purchase is month 3).
 
 ## What this project is
 
@@ -59,6 +60,15 @@ Full instructions: `docs/SETUP_GUIDE.md`. Codebase map:
   std vs adaptive quiet baseline; dashboard switches to a live signal
   sparkline + presence pill. Presence/motion ONLY — one link has no
   position information; this is deliberately scoped and documented.
+- **Pose track** (`simulate/body_model.py`, `models/pose.py`,
+  `config/pose.yaml`, `scripts/generate_pose_dataset.py`,
+  `scripts/train_pose.py`, server `mode="pose"`, `/body` renderer):
+  14-joint articulated body with 5 postures → per-joint CSI scatterers
+  (vectorized, ~30× faster) → motion-spectrum + window features →
+  posture MLP + joint MLP → confidence-weighted prior fusion → live
+  wireframe mesh with ground-truth overlay. Metrics: MPJPE, PCK@10/20,
+  per-joint breakdown, posture confusion. Research basis and honest
+  scope: `POSE_FROM_WIFI.md`. Run: `python scripts/run_demo.py --pose`.
 - **Router mode** (`collect/router_live.py`, server `mode="router"`,
   `scripts/router_live.py`): polls per-station RSSI for every device
   connected to the router (`iw station dump` over ssh — OpenWrt-class —
@@ -74,9 +84,11 @@ Full instructions: `docs/SETUP_GUIDE.md`. Codebase map:
   rssi mode a centred avatar reacts to the motion level. Page carries an
   explicit "this is avatar visualization, not Wi-Fi pose estimation"
   disclaimer — keep it; pose sensing is out of thesis scope.
-- **Tests**: 17 pytest cases — simulator physics, filters, phase
+- **Tests**: 35 pytest cases — simulator physics, filters, phase
   sanitization, windowing, Kalman, metrics, split integrity, serial parsing,
-  save/load round-trip + end-to-end mini-pipeline. All passing.
+  RSSI/router parsers + motion detection, body-model anatomy, spectral
+  features, MPJPE/PCK, prior fusion, save/load round-trip and an
+  end-to-end mini-pipeline. All passing (`pytest`, a few seconds).
 
 ## Current results (simulated `demo` dataset, 8 sessions / 4 days / 4 people)
 
@@ -102,6 +114,26 @@ chance level is 6.25%; ~0.9 m mean error is in the realistic range for
 commodity fingerprinting. **Known simulator artifact:** RSSI-KNN is
 unrealistically strong here — don't cite it for RQ6; that comparison needs
 hardware data.
+
+## Pose results (simulated `pose` dataset, 6 links, session-independent)
+
+`python scripts/train_pose.py --config config/pose.yaml --dataset pose`
+(~10 min; feature extraction dominates). 7200 train / 2400 test windows:
+
+| Metric | Value |
+|---|---|
+| Posture accuracy / macro-F1 | 0.583 / 0.582 (chance 0.20) |
+| `walk` / `wave` | 98% / 68% correct |
+| `idle` / `sit` / `tpose` | 30% / 49% / 47% — mutually confused |
+| MPJPE raw → fused | 18.8 cm → 17.7 cm |
+| PCK@10 / PCK@20 | 0.46 / 0.64 |
+| Per-joint best → worst | hips 11.7 cm → wrists 36.9 cm |
+
+Interpretation (full analysis in `POSE_FROM_WIFI.md` §4): dynamic postures
+separate cleanly on motion-spectrum features, static ones do not — pose is
+**observability-limited, not model-limited**. Error grows torso→extremities
+exactly as in the real pose-estimation literature. Levers that moved the
+numbers: link count (3→6: 0.39→0.47) and data volume (4×: 0.47→0.583).
 
 ## Key context a newcomer needs (read before changing code)
 
@@ -139,6 +171,17 @@ hardware data.
 
 ## Session log
 
+- **2026-07-29 d** (Claude Code): user asked for the DensePose-from-WiFi
+  result (dense mesh on people). Researched the actual paper + related work
+  first (`POSE_FROM_WIFI.md`, with sources): CMU used 2×3-antenna routers
+  = 9 links, camera-supervised DensePose labels, and reports AP 43.5 →
+  27.3 across unseen layouts. Concluded dense UV surface is out of reach
+  (no camera rig, no CSI hardware) but the *pose pipeline* is buildable and
+  measurable in simulation. Implemented articulated body + per-joint
+  scattering + motion-spectrum features + posture/joint models + prior
+  fusion + live skeleton-driven mesh view. 35 tests passing. Key finding:
+  observability-limited, not model-limited. **Next real step is MM-Fi**
+  (public real-CSI pose dataset) — no purchase required.
 - **2026-07-29 c** (Claude Code): user reported wifi_live "not working" on
   their test (likely VM/flat-RSSI — troubleshooting table added to
   SETUP_GUIDE §3b) and asked for router integration to sense all connected

@@ -26,6 +26,38 @@ def windows_from_stream(n_samples: int, size: int, step: int) -> list[tuple[int,
     return [(s, s + size) for s in range(0, n_samples - size + 1, step)]
 
 
+MOTION_SPECTRUM_BINS = 8
+
+
+def spectral_band_features(amp: np.ndarray, fs: float,
+                           n_bins: int = MOTION_SPECTRUM_BINS) -> np.ndarray:
+    """Motion-spectrum features for one window: the low-frequency profile.
+
+    Averages amplitude over subcarriers, removes the mean, and takes the
+    first ``n_bins`` FFT power bins — the human-motion band. Distinguishes
+    movement *types*: static bodies concentrate at DC, walking gait shows a
+    ~1 Hz peak, arm waving ~2–3 Hz. Powers are log-scaled and per-link
+    normalized, so the profile *shape* carries the information rather than
+    absolute signal strength (which encodes position, not posture).
+
+    Resolution note: bin spacing is ``fs / window_size`` = 1 Hz for the
+    default 1 s window, so sub-1 Hz structure is not resolvable — use a
+    longer window if slow motions must be separated. Everything above
+    ``n_bins`` Hz is noise at these packet rates.
+
+    Returns (n_links * n_bins,).
+    """
+    x = amp.mean(axis=2)                          # (time, links)
+    x = x - x.mean(axis=0, keepdims=True)
+    ps = np.abs(np.fft.rfft(x, axis=0)) ** 2      # (freqs, links)
+    prof = ps[:n_bins].T                          # (links, n_bins)
+    if prof.shape[1] < n_bins:                    # very short windows
+        prof = np.pad(prof, ((0, 0), (0, n_bins - prof.shape[1])))
+    prof = np.log1p(prof)
+    prof /= prof.sum(axis=1, keepdims=True) + 1e-9
+    return prof.ravel()
+
+
 def extract_window_features(amp: np.ndarray, phase: np.ndarray) -> np.ndarray:
     """Feature vector for one window.
 
@@ -55,6 +87,10 @@ class PreprocessPipeline:
         self.amp_std: np.ndarray | None = None
         self._pca_mean: np.ndarray | None = None
         self._pca_components: np.ndarray | None = None
+        # Optional empty-room amplitude baseline (n_links, n_subcarriers):
+        # static-background subtraction (plan §11.1) isolates the
+        # person-scattered field — used by the pose pipeline.
+        self.baseline_amp: np.ndarray | None = None
 
     # ------------------------------------------------------------- cleaning
 
@@ -63,6 +99,8 @@ class PreprocessPipeline:
         p = self.cfg.preprocess
         csi = interpolate_lost_packets(csi)
         amp = np.abs(csi)
+        if self.baseline_amp is not None:
+            amp = amp - self.baseline_amp
         amp = hampel_filter(amp, p.hampel_window, p.hampel_sigmas)
         amp = lowpass_filter(amp, p.lowpass_cutoff_hz, self.cfg.signal.sample_rate_hz)
         phase = sanitize_phase(csi)
@@ -123,6 +161,7 @@ class PreprocessPipeline:
             "amp_std": self.amp_std,
             "pca_mean": self._pca_mean,
             "pca_components": self._pca_components,
+            "baseline_amp": self.baseline_amp,
         }
 
     def load_state_dict(self, state: dict) -> None:
@@ -130,3 +169,4 @@ class PreprocessPipeline:
         self.amp_std = state["amp_std"]
         self._pca_mean = state["pca_mean"]
         self._pca_components = state["pca_components"]
+        self.baseline_amp = state.get("baseline_amp")

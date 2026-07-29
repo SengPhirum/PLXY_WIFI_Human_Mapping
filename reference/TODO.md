@@ -4,6 +4,27 @@ Ordered roughly by thesis value ÷ effort. Check off in place, keep history.
 See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 `THESIS_PLAN.md` §17 for scheduling context.
 
+## Pose track — next steps (highest research value)
+
+- [ ] **Train the pose models on MM-Fi** (public dataset: 40 subjects, 27
+      actions, 4 environments, 17-joint labels, real 1×3 MIMO CSI). This
+      is the single highest-value action in the whole project: it converts
+      the pose pipeline from simulator-validated to **real-CSI validated
+      with zero hardware purchase**. Write an MM-Fi loader that emits the
+      existing pose-session format, then `train_pose.py` works unchanged.
+- [ ] Run `train_pose.py --scaling` to completion and put the
+      accuracy-vs-data curve in the thesis — the curve had not flattened
+      at 7200 windows, so it bounds how much more data is worth collecting.
+- [ ] Link-count ablation for pose specifically (3 / 4 / 6 / 9 receivers) —
+      quantifies the observability claim and directly informs what hardware
+      to buy. Nearly free in simulation.
+- [ ] Torch CNN/CNN-GRU pose heads (`models/deep.py`) once MM-Fi data is
+      in — only worth it on real data volume, not on the simulated set.
+- [ ] Longer windows (2–4 s) to resolve sub-1 Hz motion; currently 1 s
+      windows give 1 Hz FFT bins, which is the resolution floor.
+- [ ] Camera-supervised labelling rig (webcam + MediaPipe → 17-joint
+      labels synchronized to CSI) — required for own-hardware pose data.
+
 ## Now (software, no hardware required)
 
 - [ ] **Run `scripts/wifi_live.py` on a real laptop** (container has no
@@ -71,6 +92,9 @@ See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 
 ## Done
 
+- [x] Pose track: articulated body simulator, per-joint CSI scattering,
+      motion-spectrum features, posture + joint models, prior fusion,
+      live skeleton mesh view, research review (2026-07-29)
 - [x] Real-Wi-Fi RSSI live mode + motion/presence detection + signal panel
       (2026-07-29)
 - [x] /body wireframe avatar view, sim + rssi modes (2026-07-29)

@@ -101,6 +101,135 @@ def _perturb_environment(cfg: Config, day: int, rng: np.random.Generator) -> Con
     return env
 
 
+def generate_pose_session(cfg: Config, session_id: int, day: int, person: int,
+                          n_captures: int = 150, seed: int | None = None) -> dict[str, Any]:
+    """Simulate one pose-collection session with an articulated body.
+
+    Each capture is one window-length recording of a person at a random
+    room position and heading holding (or performing) one posture from the
+    vocabulary. Labels per capture: posture id, root (x, y), and the
+    body-local joint offsets (heading-invariant, what the regressor learns).
+    """
+    from .simulate.body_model import JOINT_GAINS, POSTURES, ArticulatedBody
+
+    rng = np.random.default_rng(seed)
+    env_cfg = _perturb_environment(cfg, day, rng)
+    sim = CsiSimulator(env_cfg, seed=int(rng.integers(2 ** 31)))
+    body = ArticulatedBody(height=1.60 + 0.06 * (person % 5))
+    n_pkt = cfg.preprocess.window_size
+    dt = 1.0 / cfg.signal.sample_rate_hz
+
+    # Empty-room amplitude baseline (protocol §9: recorded at session start;
+    # used for static-background subtraction in the pose pipeline).
+    empty = np.stack([sim.csi_empty() for _ in range(300)])
+    baseline = np.nanmean(np.abs(empty), axis=0).astype(np.float32)
+
+    csi_parts, seg_parts = [], []
+    xy_list, posture_list, joints_list = [], [], []
+    for cap in range(n_captures):
+        posture = POSTURES[int(rng.integers(len(POSTURES)))]
+        root = np.array([rng.uniform(0.5, cfg.room.width - 0.5),
+                         rng.uniform(0.5, cfg.room.depth - 0.5)])
+        heading = rng.uniform(0, 2 * np.pi)
+        phase = rng.uniform(0, 2 * np.pi)
+        speed = 0.6 + 0.1 * (person % 4)
+        seq = np.empty((n_pkt, len(JOINT_GAINS), 3))
+        for t in range(n_pkt):
+            if posture == "walk":
+                root = root + speed * dt * np.array([np.cos(heading + np.pi / 2),
+                                                     np.sin(heading + np.pi / 2)])
+                root[0] = float(np.clip(root[0], 0.3, cfg.room.width - 0.3))
+                root[1] = float(np.clip(root[1], 0.3, cfg.room.depth - 0.3))
+            phase += dt * (2.0 + 5.0 * (posture == "walk"))
+            jw = body.joints_world(posture, phase, root, heading)
+            jw[:, :2] += rng.normal(0, 0.008, jw[:, :2].shape)  # body sway
+            seq[t] = jw
+        csi_parts.append(sim.csi_sequence_joints(seq, JOINT_GAINS))
+        seg_parts.append(np.full(n_pkt, cap))
+        xy_list.append(root.copy())
+        posture_list.append(POSTURES.index(posture))
+        # Heading-invariant label: local-frame joints at the window midpoint.
+        joints_list.append(body.joints_local(posture, phase).astype(np.float32))
+
+    return {
+        "csi": np.concatenate(csi_parts).astype(np.complex64),
+        "xy": np.repeat(np.stack(xy_list), n_pkt, axis=0).astype(np.float32),
+        "seg": np.concatenate(seg_parts).astype(np.int32),
+        "posture": np.array(posture_list, dtype=np.int32),      # per capture
+        "joints": np.stack(joints_list),                        # (caps, K, 3)
+        "baseline": baseline,                                   # (links, sc)
+        "meta": {"session": session_id, "day": day, "person": person,
+                 "room": cfg.room.name, "kind": "simulated-pose"},
+    }
+
+
+def save_pose_session(session: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, csi=session["csi"], xy=session["xy"],
+                        seg=session["seg"], posture=session["posture"],
+                        joints=session["joints"], baseline=session["baseline"],
+                        meta=json.dumps(session["meta"]))
+
+
+def load_pose_session(path: Path) -> dict[str, Any]:
+    with np.load(path, allow_pickle=False) as z:
+        return {"csi": z["csi"], "xy": z["xy"], "seg": z["seg"],
+                "posture": z["posture"], "joints": z["joints"],
+                "baseline": z["baseline"],
+                "meta": json.loads(str(z["meta"]))}
+
+
+def pose_sessions_to_arrays(cfg: Config, sessions: list[dict[str, Any]],
+                            pipeline: PreprocessPipeline,
+                            fit: bool = False) -> dict[str, np.ndarray]:
+    """Pose sessions → (X, posture, joints, xy) window arrays.
+
+    Each capture segment is exactly one window, so features and labels
+    align 1:1 by construction.
+    """
+    from .preprocess.pipeline import extract_window_features, spectral_band_features
+
+    fs = cfg.signal.sample_rate_hz
+    # Each session carries its own empty-room baseline (per-deployment
+    # calibration); the pipeline's stored baseline is set per session here
+    # and replaced by a fresh empty-room capture at live-inference time.
+    if fit:
+        amps = []
+        for s in sessions:
+            pipeline.baseline_amp = s.get("baseline")
+            amps.append(pipeline.clean(s["csi"])[0])
+        pipeline.fit_normalizer(np.concatenate(amps))
+
+    X_parts, post_parts, joint_parts, xy_parts, meta_parts = [], [], [], [], []
+    for s in sessions:
+        pipeline.baseline_amp = s.get("baseline")
+        seg = s["seg"]
+        for cap_i, seg_id in enumerate(np.unique(seg)):
+            m = seg == seg_id
+            amp, phase = pipeline.clean(s["csi"][m])
+            amp_n = pipeline.normalize(amp)
+            feats = np.concatenate([
+                extract_window_features(amp_n, phase),
+                spectral_band_features(amp, fs),
+            ])
+            X_parts.append(feats[None, :])   # one window per capture
+            post_parts.append(s["posture"][cap_i])
+            joint_parts.append(s["joints"][cap_i].ravel())
+            xy_parts.append(s["xy"][m].mean(axis=0))
+            meta_parts.append(s["meta"])
+
+    X = np.concatenate(X_parts)
+    if fit:
+        pipeline.fit_pca(X)
+    return {
+        "X": pipeline.project(X),
+        "posture": np.array(post_parts),
+        "joints": np.stack(joint_parts),
+        "xy": np.stack(xy_parts),
+        "meta": meta_parts,
+    }
+
+
 # ------------------------------------------------------------------ storage
 
 def save_session(session: dict[str, Any], path: Path) -> None:

@@ -5,6 +5,49 @@ supersede.
 
 ---
 
+## 2026-07-29 d — Pose estimation track
+
+**D16. Build the pose *pipeline*, not a fake DensePose.** The requested
+reference image is CMU's DensePose-from-WiFi: dense UV body surface, from
+9 antenna links, supervised by a camera running image-based DensePose. We
+have neither CSI hardware nor a camera rig, so dense surface regression is
+not reproducible here. Decision: implement the complete pose pipeline
+(articulated body physics → CSI → features → posture + 14-joint models →
+fused skeleton → mesh rendering) evaluated in simulation with *real*
+keypoint metrics (MPJPE, PCK) under leakage-aware splits. Rejected
+alternatives: (a) render a canned animation and call it pose estimation —
+dishonest; (b) refuse the request — the pipeline genuinely is buildable and
+the findings are thesis-relevant. Every surface (page text, docs, research
+note) states the simulator scope explicitly.
+
+**D17. 14 joints, 5 postures — not 17 COCO keypoints.** The COCO-17 set
+includes facial keypoints (eyes, ears) that carry no Wi-Fi observability
+whatsoever; regressing them would manufacture fake precision. The 14-joint
+subset is the RF-observable skeleton. Postures are a small vocabulary
+because posture *class* is what a 6-link array can plausibly support.
+
+**D18. Separate `config/pose.yaml` with a 6-receiver ring.** Pose needs
+spatial diversity the 3-link localization array cannot give (measured:
+3→6 links moved accuracy 0.39→0.47). Keeping it a separate config avoids
+degrading the localization track and makes the link-count dependence an
+explicit, testable variable rather than a hidden assumption.
+
+**D19. Prior fusion instead of raw regression output.** A raw joint
+regressor produces anatomically impossible skeletons on hard windows.
+`fuse_pose` blends toward the predicted posture's canonical skeleton,
+weighted by classifier confidence — improves MPJPE (18.8→17.7 cm) and
+greatly improves plausibility. Kept as a *post-process* so the raw
+regression metrics remain reportable and honest.
+
+**D20. Motion-spectrum features use raw FFT bins, not named bands.** The
+first implementation used semantic bands (0–0.5, 0.5–1 Hz …); a unit test
+exposed that a 1 s window has 1 Hz bin spacing, so the sub-1 Hz bands could
+never be populated. Replaced with the first 8 FFT bins, normalized per
+link. Lesson recorded because it is a real resolution constraint on any
+window-based Doppler feature here.
+
+---
+
 ## 2026-07-29 c — Router integration
 
 **D14. Router polling over ssh + `iw`, not vendor APIs.** Per-station RSSI

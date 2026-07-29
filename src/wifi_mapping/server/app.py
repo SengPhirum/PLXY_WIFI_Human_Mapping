@@ -17,6 +17,9 @@ Three live sources:
 - ``mode="router"`` — REAL Wi-Fi via the router: per-station RSSI of every
   connected device (collect/router_live.py), per-link motion detection,
   activity drawn on the floor plan for devices with configured positions.
+- ``mode="pose"`` — simulated articulated body: CSI from the 14-joint body
+  model is pushed through the trained pose models, broadcasting predicted
+  posture + skeleton alongside ground truth (the /body view renders both).
 
 Endpoints:
     GET  /               dashboard (single-file HTML/JS)
@@ -110,6 +113,60 @@ def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
             next_tick += batch * dt
             await asyncio.sleep(max(0.0, next_tick - time.perf_counter()))
 
+    async def pose_loop() -> None:
+        """Simulated person cycling through postures; CSI from the
+        articulated body model is pushed through the trained pose models in
+        real time, and both prediction and ground-truth skeleton are
+        broadcast so the view can show them side by side."""
+        from ..simulate.body_model import JOINT_GAINS, POSTURES, ArticulatedBody
+
+        sim = CsiSimulator(cfg, seed=sim_seed)
+        body = ArticulatedBody()
+        rng = np.random.default_rng(sim_seed)
+        dt = 1.0 / cfg.signal.sample_rate_hz
+        batch = max(1, int(cfg.signal.sample_rate_hz // 20))
+
+        posture = "idle"
+        root = np.array([cfg.room.width / 2, cfg.room.depth * 0.45])
+        heading = 0.0
+        phase = 0.0
+        hold_until = time.time() + 6.0
+        next_tick = time.perf_counter()
+        while True:
+            if time.time() > hold_until:
+                posture = POSTURES[int(rng.integers(len(POSTURES)))]
+                heading = float(rng.uniform(0, 2 * np.pi))
+                hold_until = time.time() + float(rng.uniform(5.0, 9.0))
+            seq = np.empty((batch, len(JOINT_GAINS), 3))
+            for b in range(batch):
+                if posture == "walk":
+                    root = root + 0.7 * dt * np.array(
+                        [np.cos(heading + np.pi / 2), np.sin(heading + np.pi / 2)])
+                    root[0] = float(np.clip(root[0], 0.5, cfg.room.width - 0.5))
+                    root[1] = float(np.clip(root[1], 0.5, cfg.room.depth - 0.5))
+                phase += dt * (2.0 + 5.0 * (posture == "walk"))
+                seq[b] = body.joints_world(posture, phase, root, heading)
+            frames = sim.csi_sequence_joints(seq, JOINT_GAINS)
+            for b in range(batch):
+                event = predictor.push_frame(frames[b])
+                state["frames"] += 1
+                if event is not None:
+                    gt = body.joints_local(posture, phase)
+                    event.update(mode="pose", gt_posture=posture,
+                                 gt_joints=[[round(float(v), 4) for v in j]
+                                            for j in gt],
+                                 root=[float(root[0]), float(root[1])],
+                                 heading=float(heading))
+                    if "joints" in event:
+                        pred = np.array(event["joints"])
+                        event["mpjpe_cm"] = float(
+                            np.linalg.norm(pred - gt, axis=1).mean() * 100)
+                    state["predictions"] += 1
+                    state["last_latency_ms"] = event["latency_ms"]
+                    await hub.send(event)
+            next_tick += batch * dt
+            await asyncio.sleep(max(0.0, next_tick - time.perf_counter()))
+
     async def rssi_loop() -> None:
         """Real Wi-Fi from the connected interface → signal/motion events."""
         from ..collect.rssi_live import RssiMonitor
@@ -166,6 +223,8 @@ def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
     async def _startup() -> None:
         if mode == "sim":
             asyncio.create_task(sim_loop())
+        elif mode == "pose":
+            asyncio.create_task(pose_loop())
         elif mode == "rssi":
             asyncio.create_task(rssi_loop())
         elif mode == "router":

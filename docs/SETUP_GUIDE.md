@@ -29,7 +29,7 @@ pip install -r requirements-torch.txt --index-url https://download.pytorch.org/w
 ## 2. Sanity check
 
 ```bash
-pytest            # 17 tests, a few seconds, no hardware touched
+pytest            # 35 tests, a few seconds, no hardware touched
 ```
 
 ## 3. One-command demo
@@ -74,6 +74,19 @@ python scripts/run_demo.py --fresh            # regenerate data + retrain
 python scripts/run_demo.py --port 8080        # different port
 python scripts/run_demo.py --sim-seed 21      # different walking pattern
 ```
+
+### Pose estimation demo
+
+```bash
+python scripts/run_demo.py --pose      # → http://127.0.0.1:8000/body
+```
+
+Predicts posture and a 14-joint skeleton from CSI, and renders a wireframe
+mesh built around the *predicted* joints with the ground-truth skeleton
+overlaid — the dual-pane view in the style of DensePose-from-WiFi. First
+run generates a pose dataset (~6 min) and trains the models (~10 min);
+afterwards it starts immediately. Everything about it, including measured
+accuracy and honest limits: **[POSE_GUIDE.md](POSE_GUIDE.md)**.
 
 ### Body view (wireframe avatar)
 

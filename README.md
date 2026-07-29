@@ -29,6 +29,21 @@ person walking the room — predictions and live localization error on screen.
 The **/body** page adds a wireframe-avatar view of the live track (dual-pane,
 mesh-on-black style). Full walkthrough: **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
 
+### Pose estimation demo
+
+```bash
+python scripts/run_demo.py --pose     # → http://127.0.0.1:8000/body
+```
+
+Predicts a **14-joint body skeleton and posture class from CSI**, and
+renders a wireframe mesh built around the predicted joints with the
+ground-truth skeleton overlaid — dual-pane, in the style of
+DensePose-from-WiFi. Measured on simulated CSI with a session-independent
+split: posture accuracy **0.583** (chance 0.20; `walk` 98%), **MPJPE
+17.7 cm**, PCK@20 cm 0.64. Research basis, feasibility analysis, and the
+scope statement: **[reference/POSE_FROM_WIFI.md](reference/POSE_FROM_WIFI.md)**
+and **[docs/POSE_GUIDE.md](docs/POSE_GUIDE.md)**.
+
 **Real signal, today, no ESP32:**
 
 - `python scripts/wifi_live.py` — presence/motion sensing on the laptop's
@@ -49,11 +64,12 @@ and [firmware/esp32-csi/README.md](firmware/esp32-csi/README.md).
 
 | Path | Contents |
 |---|---|
-| `src/wifi_mapping/` | The package: simulator, preprocessing, models, tracking, eval, server |
-| `scripts/` | `generate_dataset` → `train` → `evaluate` → `run_demo`, plus `collect_esp32` |
+| `src/wifi_mapping/` | The package: simulator, body model, preprocessing, models, tracking, eval, server |
+| `scripts/` | `generate_dataset` → `train` → `evaluate` → `run_demo`, plus `generate_pose_dataset`/`train_pose`, `collect_esp32`, `wifi_live`, `router_live` |
 | `config/default.yaml` | Room geometry, grid, link layout, signal + pipeline parameters |
+| `config/pose.yaml` | Pose configuration: 6-link receiver ring, no PCA |
 | `firmware/esp32-csi/` | ESP32 flashing and verification guide |
-| `tests/` | pytest suite (fast, no hardware) |
+| `tests/` | pytest suite — 35 tests, fast, no hardware |
 | `docs/` | Setup guide, hardware guide, architecture notes |
 | `reference/` | **Research notes, thesis plan, TODO, and project status for continuing work** |
 
@@ -72,8 +88,9 @@ interpretation.
 | §11 processing pipeline | `preprocess/` (Hampel, low-pass, phase sanitization, windows, PCA) |
 | §11.2 models | `models/` (RSSI-KNN, KNN/SVM/RF/MLP, optional CNN & CNN-GRU) |
 | §12 leakage prevention | `eval/splits.py` (session/day/person-independent) |
-| §13 metrics | `eval/metrics.py` |
-| §15 dashboard | `server/` (FastAPI + WebSocket + canvas floor plan) |
+| §13 metrics | `eval/metrics.py`, `models/pose.py` (MPJPE/PCK) |
+| §15 dashboard | `server/` (FastAPI + WebSocket + canvas floor plan + body view) |
+| pose feasibility study | `simulate/body_model.py`, `models/pose.py`, `reference/POSE_FROM_WIFI.md` |
 
 ## License / ethics
 

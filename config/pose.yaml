@@ -1,0 +1,76 @@
+# ============================================================================
+# Pose-estimation configuration.
+#
+# Pose needs far more spatial diversity than localization: DensePose-from-WiFi
+# (CMU, arXiv:2301.00250) used two 3-antenna routers = 3x3 = 9 links, and
+# MM-Fi uses a 1x3 MIMO array over 114 subcarriers. This config therefore
+# defines a 6-receiver ring (6 links) around the room instead of the 3-link
+# localization array, and a larger window so gait/wave frequencies resolve.
+#
+# Use with:  --config config/pose.yaml
+# ============================================================================
+
+room:
+  name: "lab-room-A"
+  width: 5.0
+  depth: 6.0
+  height: 2.8
+
+grid:
+  cols: 4
+  rows: 4
+
+links:
+  tx:
+    id: "TX0"
+    pos: [2.5, 0.15, 1.2]
+  rx:
+    - { id: "RX0", pos: [0.15, 5.85, 1.2] }
+    - { id: "RX1", pos: [4.85, 5.85, 1.2] }
+    - { id: "RX2", pos: [4.85, 0.15, 1.2] }
+    - { id: "RX3", pos: [0.15, 0.15, 1.2] }
+    - { id: "RX4", pos: [0.15, 3.00, 1.2] }
+    - { id: "RX5", pos: [4.85, 3.00, 1.2] }
+
+signal:
+  carrier_freq_hz: 2.412e9
+  bandwidth_hz: 20.0e6
+  n_subcarriers: 52
+  sample_rate_hz: 100
+  noise_std: 0.05
+  packet_loss: 0.02
+
+preprocess:
+  hampel_window: 11
+  hampel_sigmas: 3.0
+  lowpass_cutoff_hz: 10.0
+  window_size: 100          # 1 s: resolves gait (~1 Hz) and wave (~2 Hz)
+  window_step: 50
+  n_pca_components: 0       # pose needs the full feature detail; do not reduce
+
+model:
+  type: "mlp"
+  task: "pose"
+
+tracking:
+  process_noise: 0.35
+  measurement_noise: 0.45
+
+paths:
+  data_dir: "data"
+  models_dir: "data/models"
+  datasets_dir: "data/datasets"
+  sessions_dir: "data/sessions"
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+router:
+  host: "192.168.1.1"
+  user: "root"
+  interfaces: ["wlan0", "wlan1"]
+  poll_hz: 2.0
+  position: [2.5, 0.15]
+  threshold: 0.8
+  devices: {}

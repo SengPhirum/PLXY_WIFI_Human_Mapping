@@ -56,6 +56,14 @@ can't accidentally run a model against differently-normalized features.
 unconditionally; `cnn`/`cnn_gru` import torch lazily and fail with an
 actionable message if it's absent. The demo never needs a GPU.
 
+**Pose is a parallel track, not a replacement.** It reuses the same
+simulator, preprocessing, splits, and server, but adds per-joint
+scattering, motion-spectrum features, and its own two-head model +
+metrics. It runs on its own config (`config/pose.yaml`, 6 receivers)
+because pose needs more links than localization — see
+`reference/POSE_FROM_WIFI.md` for why, and for the scope boundary between
+what is measured and what is rendered.
+
 **Simulator realism budget.** The simulator reproduces the mechanisms that
 matter for the pipeline (subcarrier-dependent multipath fingerprints, body
 shadowing, per-packet random CFO/SFO phase corruption, packet loss,
@@ -69,7 +77,9 @@ dataset. See `reference/RESEARCH_NOTES.md` § Simulator.
 | Module | Responsibility | Key entry points |
 |---|---|---|
 | `config.py` | Typed YAML config, room/zone geometry | `load_config`, `Config.zone_of` |
-| `simulate/csi_simulator.py` | Synthetic CSI + walking trajectories | `CsiSimulator.csi_at`, `WalkGenerator.step` |
+| `simulate/csi_simulator.py` | Synthetic CSI + walking trajectories | `CsiSimulator.csi_at`, `csi_sequence_joints`, `WalkGenerator.step` |
+| `simulate/body_model.py` | 14-joint articulated body, 5 postures | `ArticulatedBody.joints_world` |
+| `models/pose.py` | Posture + joint models, prior fusion, MPJPE/PCK | `fuse_pose`, `mpjpe` |
 | `collect/serial_reader.py` | ESP-CSI serial parsing, multi-port reader | `parse_csi_line`, `CsiSerialReader` |
 | `collect/session.py` | Frame alignment + ground truth → .npz | `SessionRecorder` |
 | `dataset.py` | Session generation/IO, feature assembly | `generate_session`, `sessions_to_arrays` |

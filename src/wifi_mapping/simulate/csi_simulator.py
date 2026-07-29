@@ -113,6 +113,89 @@ class CsiSimulator:
             out[i] = h
         return out
 
+    def csi_at_joints(self, joints: np.ndarray, gains: np.ndarray) -> np.ndarray:
+        """One CSI packet per link for an articulated body.
+
+        Parameters
+        ----------
+        joints : (K, 3) world positions of body scatterers
+        gains  : (K,) per-scatterer reflection weights
+
+        Each scatterer contributes a TX→joint→RX ray; the trunk (mean of the
+        hip/shoulder scatterers) also shadows the LoS as in ``csi_at``.
+        """
+        s = self.cfg.signal
+        trunk = joints[gains >= gains.max() * 0.9].mean(axis=0)
+        out = np.empty((len(self.rx), s.n_subcarriers), dtype=complex)
+        for i, rx in enumerate(self.rx):
+            if self.rng.random() < s.packet_loss:
+                out[i] = np.nan
+                continue
+            scattered = np.zeros(s.n_subcarriers, dtype=complex)
+            for k in range(joints.shape[0]):
+                d1 = float(np.linalg.norm(joints[k] - self.tx))
+                d2 = float(np.linalg.norm(rx - joints[k]))
+                scattered += self._ray(d1 + d2, gain=float(gains[k]))
+            seg = rx - self.tx
+            t = float(np.clip(np.dot(trunk - self.tx, seg) / np.dot(seg, seg), 0, 1))
+            gap = float(np.linalg.norm(trunk - (self.tx + t * seg)))
+            shadow = 1.0 - 0.6 * np.exp(-(gap / 0.5) ** 2)
+            h = self._static[i] * shadow + scattered
+            cfo = self.rng.uniform(0, 2 * np.pi)
+            slope = self.rng.uniform(-0.1, 0.1)
+            ks = np.arange(s.n_subcarriers)
+            h = h * np.exp(1j * (cfo + slope * ks))
+            h = h + (self.rng.normal(0, s.noise_std, h.shape)
+                     + 1j * self.rng.normal(0, s.noise_std, h.shape))
+            out[i] = h
+        return out
+
+    def csi_sequence_joints(self, joints_seq: np.ndarray,
+                            gains: np.ndarray) -> np.ndarray:
+        """Vectorized batch version of :meth:`csi_at_joints`.
+
+        Parameters
+        ----------
+        joints_seq : (T, K, 3) joint positions over time
+        gains      : (K,) per-scatterer reflection weights
+
+        Returns (T, n_links, n_subcarriers). Roughly 30× faster than
+        calling ``csi_at_joints`` in a Python loop, which is what makes
+        pose-dataset generation practical.
+        """
+        s = self.cfg.signal
+        T, K = joints_seq.shape[:2]
+        trunk = joints_seq[:, gains >= gains.max() * 0.9].mean(axis=1)  # (T,3)
+        out = np.empty((T, len(self.rx), s.n_subcarriers), dtype=complex)
+        two_pi_over_c = 2.0 * np.pi / C
+        ks = np.arange(s.n_subcarriers)
+
+        for i, rx in enumerate(self.rx):
+            d1 = np.linalg.norm(joints_seq - self.tx, axis=2)        # (T,K)
+            d2 = np.linalg.norm(joints_seq - rx, axis=2)             # (T,K)
+            lengths = d1 + d2
+            amps = gains[None, :] / np.maximum(lengths, 0.5)
+            # (T,K,S) ray phases → sum over scatterers
+            ph = -two_pi_over_c * lengths[:, :, None] * self.freqs[None, None, :]
+            scattered = (amps[:, :, None] * np.exp(1j * ph)).sum(axis=1)  # (T,S)
+
+            seg = rx - self.tx
+            t_par = np.clip((trunk - self.tx) @ seg / (seg @ seg), 0, 1)
+            closest = self.tx + t_par[:, None] * seg
+            gap = np.linalg.norm(trunk - closest, axis=1)
+            shadow = 1.0 - 0.6 * np.exp(-(gap / 0.5) ** 2)           # (T,)
+
+            h = self._static[i][None, :] * shadow[:, None] + scattered
+            cfo = self.rng.uniform(0, 2 * np.pi, T)
+            slope = self.rng.uniform(-0.1, 0.1, T)
+            h = h * np.exp(1j * (cfo[:, None] + slope[:, None] * ks[None, :]))
+            h = h + (self.rng.normal(0, s.noise_std, h.shape)
+                     + 1j * self.rng.normal(0, s.noise_std, h.shape))
+            lost = self.rng.random(T) < s.packet_loss
+            h[lost] = np.nan
+            out[:, i, :] = h
+        return out
+
     def csi_empty(self) -> np.ndarray:
         """One CSI packet per link with no person in the room."""
         s = self.cfg.signal
