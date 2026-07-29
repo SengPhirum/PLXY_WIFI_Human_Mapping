@@ -26,7 +26,13 @@ The first run simulates a full data-collection campaign (8 sessions across
 4 days and 4 participants, ~2 min), trains a Random-Forest localizer with an
 honest session-independent split, then starts the dashboard with a simulated
 person walking the room — predictions and live localization error on screen.
-Full walkthrough: **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
+The **/body** page adds a wireframe-avatar view of the live track (dual-pane,
+mesh-on-black style). Full walkthrough: **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
+
+**Real signal, today, no ESP32:** on a Wi-Fi-connected laptop,
+`python scripts/wifi_live.py` runs live presence/motion sensing on the
+actual RSSI of the connected link (walk between laptop and router and watch
+the dashboard react). Localization still requires the multi-link setup.
 
 With real ESP32 hardware: **[docs/HARDWARE_GUIDE.md](docs/HARDWARE_GUIDE.md)**
 and [firmware/esp32-csi/README.md](firmware/esp32-csi/README.md).

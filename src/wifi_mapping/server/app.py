@@ -1,6 +1,6 @@
 """FastAPI application: mapping dashboard + live position WebSocket.
 
-Two live sources:
+Three live sources:
 
 - ``mode="sim"``  — a simulated person walks the room; the simulator's CSI
   is fed through the trained model in real time. The ground-truth position
@@ -9,13 +9,19 @@ Two live sources:
 - ``mode="hw"``   — frames come from ESP32 receivers via
   ``scripts/collect_esp32.py --live`` posting to /api/frame (documented in
   docs/SETUP_GUIDE.md). No ground truth in this mode.
+- ``mode="rssi"`` — REAL Wi-Fi signal from this machine's connected
+  wireless interface (collect/rssi_live.py): live RSSI waveform plus
+  motion/presence detection. No localization — a single laptop link
+  carries no position information; the dashboard switches to a signal
+  panel and the body view shows a presence-reactive avatar.
 
 Endpoints:
     GET  /               dashboard (single-file HTML/JS)
+    GET  /body           wireframe body view (avatar rendering of the track)
     GET  /api/config     room geometry, grid, node layout for rendering
     GET  /api/status     packet/prediction counters, model info
     POST /api/frame      push one CSI frame (hardware mode)
-    WS   /ws             stream of prediction events (JSON)
+    WS   /ws             stream of prediction/signal events (JSON)
 """
 
 from __future__ import annotations
@@ -62,8 +68,9 @@ class Broadcaster:
             self.disconnect(ws)
 
 
-def create_app(cfg: Config, predictor: LivePredictor, mode: str = "sim",
-               sim_seed: int | None = None) -> FastAPI:
+def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
+               sim_seed: int | None = None,
+               wifi_interface: str | None = None) -> FastAPI:
     app = FastAPI(title="Wi-Fi Human Mapping", version="0.1.0")
     hub = Broadcaster()
     state: dict[str, Any] = {
@@ -99,16 +106,44 @@ def create_app(cfg: Config, predictor: LivePredictor, mode: str = "sim",
             next_tick += batch * dt
             await asyncio.sleep(max(0.0, next_tick - time.perf_counter()))
 
+    async def rssi_loop() -> None:
+        """Real Wi-Fi from the connected interface → signal/motion events."""
+        from ..collect.rssi_live import RssiMonitor
+
+        monitor = RssiMonitor(rate_hz=10.0, interface=wifi_interface)
+        if not monitor.sampler.available:
+            state["error"] = ("no wireless interface backend found "
+                              "(/proc/net/wireless, iw, airport, netsh)")
+            return
+        monitor.start()
+        state["backend"] = monitor.sampler.backend
+        last_sent = 0.0
+        while True:
+            await asyncio.sleep(0.1)
+            reading = monitor.latest()
+            if reading is None or reading["t"] <= last_sent:
+                continue
+            last_sent = reading["t"]
+            state["frames"] += 1
+            state["predictions"] += 1
+            await hub.send({**reading, "mode": "rssi"})
+
     @app.on_event("startup")
     async def _startup() -> None:
         if mode == "sim":
             asyncio.create_task(sim_loop())
+        elif mode == "rssi":
+            asyncio.create_task(rssi_loop())
 
     # ------------------------------------------------------------ endpoints
 
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/body")
+    async def body_view() -> FileResponse:
+        return FileResponse(STATIC_DIR / "body.html")
 
     @app.get("/api/config")
     async def api_config() -> JSONResponse:
@@ -130,6 +165,9 @@ def create_app(cfg: Config, predictor: LivePredictor, mode: str = "sim",
     @app.post("/api/frame")
     async def api_frame(payload: dict) -> JSONResponse:
         """Hardware mode: one aligned frame as {"re": [[..]], "im": [[..]]}."""
+        if predictor is None:
+            return JSONResponse({"ok": False, "error": "no model loaded in this mode"},
+                                status_code=409)
         frame = np.array(payload["re"], dtype=float) \
             + 1j * np.array(payload["im"], dtype=float)
         event = predictor.push_frame(frame)

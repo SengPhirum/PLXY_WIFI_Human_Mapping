@@ -5,9 +5,10 @@
 > re-deriving anything. Read this first, then `TODO.md` for next actions.
 > Keep this file updated at the end of every working session.
 
-**Last updated:** 2026-07-29
+**Last updated:** 2026-07-29 (second session)
 **State:** Software prototype complete and verified end-to-end on simulated
-data. No hardware yet (per plan timeline, purchase is month 3).
+data; real-signal RSSI mode and wireframe body view added. No CSI hardware
+yet (per plan timeline, purchase is month 3).
 
 ## What this project is
 
@@ -49,7 +50,21 @@ Full instructions: `docs/SETUP_GUIDE.md`. Codebase map:
   zone highlight, stat tiles (zone/position/error/latency/rate), recent-
   predictions table. Hardware frames can be POSTed to `/api/frame`.
 - **Scripts**: `generate_dataset` → `train` → `evaluate` → `run_demo`
-  (one-command demo with caching), `collect_esp32` (hardware).
+  (one-command demo with caching), `collect_esp32` (hardware),
+  `wifi_live` (real RSSI from the machine's connected Wi-Fi).
+- **Real-signal mode** (`collect/rssi_live.py`, server `mode="rssi"`):
+  cross-platform RSSI sampler (Linux /proc/net/wireless + iw, macOS
+  airport, Windows netsh) at 10 Hz, motion/presence detection via rolling
+  std vs adaptive quiet baseline; dashboard switches to a live signal
+  sparkline + presence pill. Presence/motion ONLY — one link has no
+  position information; this is deliberately scoped and documented.
+- **Body view** (`/body`, `server/static/body.html`): dual-pane wireframe
+  humanoid (perspective room pane + mesh-on-black pane, viridis-coloured
+  by height, painter-sorted polylines) standing at the live predicted
+  position, walk-cycle animation driven by estimated speed/heading; in
+  rssi mode a centred avatar reacts to the motion level. Page carries an
+  explicit "this is avatar visualization, not Wi-Fi pose estimation"
+  disclaimer — keep it; pose sensing is out of thesis scope.
 - **Tests**: 17 pytest cases — simulator physics, filters, phase
   sanitization, windowing, Kalman, metrics, split integrity, serial parsing,
   save/load round-trip + end-to-end mini-pipeline. All passing.
@@ -115,7 +130,16 @@ hardware data.
 
 ## Session log
 
-- **2026-07-29** (Claude Code, initial build): converted thesis plan docx →
+- **2026-07-29 b** (Claude Code): added real-Wi-Fi RSSI live mode
+  (`scripts/wifi_live.py`, `collect/rssi_live.py`, dashboard signal panel)
+  and the `/body` wireframe avatar view (user supplied a
+  DensePose-from-WiFi-style reference image; implemented as an honest
+  avatar visualization of the localization output, with in-page
+  disclaimer). 22 tests passing; both modes verified with headless-browser
+  screenshots; graceful no-wireless failure verified in the cloud container
+  (real RSSI sampling itself still needs a first run on an actual laptop —
+  parsers are unit-tested against captured output formats).
+- **2026-07-29 a** (Claude Code, initial build): converted thesis plan docx →
   `THESIS_PLAN.md`; implemented entire package, scripts, server, dashboard,
   tests, docs, reference folder; tuned simulator for honest-but-learnable
   fingerprints (see RESEARCH_NOTES §4); generated demo dataset; ran full

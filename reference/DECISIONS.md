@@ -5,6 +5,33 @@ supersede.
 
 ---
 
+## 2026-07-29 b — Real-signal mode and body view
+
+**D11. Real Wi-Fi = RSSI presence sensing, stated plainly.** The user asked
+to "enhance the demo with real Wi-Fi signal from the current device".
+Laptops cannot expose CSI without special firmware (Intel 5300 / Nexmon
+class hardware), and one laptop↔AP link carries no position information.
+Rather than fake localization on real signal, `mode="rssi"` implements what
+the signal genuinely supports — live RSSI + motion/presence detection
+(thesis scope row 1) — and the UI says so. Alternative rejected: silently
+driving the localizer with simulated data while displaying "real Wi-Fi".
+
+**D12. Body view is avatar visualization, not pose estimation.** The user's
+reference image is DensePose-from-WiFi-style mesh recovery — multi-antenna
+CSI, deep networks, large labelled datasets; the thesis plan itself rules
+pose out of scope. Implemented instead: a wireframe humanoid *rendering* of
+the real localization output (position, speed, heading drive a synthesized
+walk cycle), dual-pane in the reference image's visual style, with an
+explicit in-page disclaimer. This keeps the demo compelling without
+overclaiming — do not remove the disclaimer.
+
+**D13. Canvas 3D projection by hand, no three.js.** ~150 lines of pinhole
+projection + polyline primitives keep the zero-build, zero-CDN property of
+the dashboard (also required offline). Revisit only if the view needs
+textures/lighting.
+
+---
+
 ## 2026-07-29 — Initial implementation decisions
 
 **D1. Simulator-first development.** No hardware exists yet (plan month 3),

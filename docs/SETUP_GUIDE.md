@@ -75,6 +75,42 @@ python scripts/run_demo.py --port 8080        # different port
 python scripts/run_demo.py --sim-seed 21      # different walking pattern
 ```
 
+### Body view (wireframe avatar)
+
+While any mode is running, open **http://127.0.0.1:8000/body** (or click
+*body view →* in the dashboard header): a dual-pane rendering — perspective
+room view on a light background, mesh-only view on black — of a viridis
+wireframe human standing at the model's live predicted position, walking
+animation driven by the estimated speed and heading.
+
+Honest framing (repeated on the page itself): this is an **avatar
+visualization of the localization output**, not pose estimation. The
+measured quantities are position and movement; body shape and limb motion
+are synthesized for display. Wi-Fi pose recovery à la DensePose-from-WiFi
+needs multi-antenna CSI and large labelled datasets, and is explicitly out
+of thesis scope (plan §1).
+
+## 3b. Real Wi-Fi signal from the current device (no ESP32 needed)
+
+On a **laptop connected to Wi-Fi** (not inside a container/VM), you can run
+the demo against the real signal of the currently associated access point:
+
+```bash
+python scripts/wifi_live.py        # → dashboard + /body in real-signal mode
+```
+
+This samples the connected link's RSSI at 10 Hz (Linux
+`/proc/net/wireless`/`iw`, macOS `airport`, Windows `netsh`) and runs live
+motion/presence detection on the fluctuation. Walk between the laptop and
+the router: the RSSI trace visibly swings, the presence pill flips to
+*motion detected*, and the /body avatar wakes up and reacts.
+
+What this mode honestly is: **presence/motion sensing on real signal**
+(thesis plan scope row 1). A single laptop↔AP link carries no position
+information, and laptops cannot expose CSI without special firmware — so
+there is no localization here. Localization = simulator demo today, ESP32
+multi-link CSI when the hardware arrives ([HARDWARE_GUIDE.md](HARDWARE_GUIDE.md)).
+
 ## 4. Reproduce the baseline comparison (thesis §14)
 
 ```bash

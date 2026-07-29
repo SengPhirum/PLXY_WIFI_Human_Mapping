@@ -71,9 +71,23 @@
   <span class="pill" id="status"><span class="dot"></span><span id="statusText">connecting…</span></span>
   <span class="pill" id="modePill">mode: —</span>
   <span class="pill" id="roomPill">room: —</span>
+  <span class="pill"><a href="/body" style="color:inherit">body view →</a></span>
 </header>
 
 <div class="layout">
+  <div class="card" id="signalCard" hidden style="flex:1 1 520px">
+    <h2>Real Wi-Fi signal — this device's connected link</h2>
+    <canvas id="spark" width="860" height="220" aria-label="Live RSSI"></canvas>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--accent)"></span> RSSI (dBm)</span>
+      <span id="presencePill" class="pill"><span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px"></span><span id="presenceText">quiet</span></span>
+    </div>
+    <div class="controls" style="color:var(--muted); font-size:12px">
+      Single-link RSSI carries no position — this mode demonstrates
+      presence/motion sensing on real signal. Walk between this computer and
+      the router.
+    </div>
+  </div>
   <div class="card" id="mapCard">
     <canvas id="map" width="900" height="1080" aria-label="Floor plan with live position"></canvas>
     <div class="legend">
@@ -123,7 +137,7 @@ let heat = null, heatCols = 48, heatRows = 48;
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 function resize() {
-  if (!CFG) return;
+  if (!CFG || $("mapCard").hidden) return;
   const w = Math.min($("mapCard").clientWidth - 28, 860);
   scale = (w - 2 * pad) / CFG.room.width;
   canvas.width = w;
@@ -237,7 +251,52 @@ function draw() {
   ctx.fillText(D + " m", X(0) - 28, Y(D) + 4);
 }
 
+// ---- real-Wi-Fi (RSSI) mode: live signal sparkline -------------------
+const rssiHist = [];
+function onRssiEvent(e) {
+  count++;
+  rssiHist.push(e.rssi);
+  while (rssiHist.length > 300) rssiHist.shift();   // ~30 s @ 10 Hz
+  const c = $("spark"), g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  const lo = Math.min(...rssiHist) - 2, hi = Math.max(...rssiHist) + 2;
+  g.strokeStyle = css("--grid");
+  g.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    g.beginPath(); g.moveTo(0, c.height*i/4); g.lineTo(c.width, c.height*i/4); g.stroke();
+  }
+  g.strokeStyle = css("--accent"); g.lineWidth = 2;
+  g.beginPath();
+  rssiHist.forEach((v, i) => {
+    const x = i / 299 * c.width;
+    const y = c.height - (v - lo) / (hi - lo) * (c.height - 20) - 10;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+  g.fillStyle = css("--muted"); g.font = "11px system-ui";
+  g.fillText(hi.toFixed(0) + " dBm", 6, 14);
+  g.fillText(lo.toFixed(0) + " dBm", 6, c.height - 6);
+
+  const pill = $("presencePill"), dot = pill.querySelector(".dot");
+  $("presenceText").textContent = e.presence
+    ? "presence / motion detected" : "quiet";
+  dot.style.background = e.presence ? "var(--good)" : "var(--muted)";
+
+  $("tZone").textContent = "n/a";
+  $("tPos").textContent = e.rssi.toFixed(0) + " dBm";
+  $("tErr").textContent = e.motion.toFixed(2) + " dB";
+  $("tLat").textContent = "—";
+  $("tCount").textContent = count;
+  const now = performance.now();
+  lastTimes.push(now); while (lastTimes.length > 12) lastTimes.shift();
+  if (lastTimes.length > 3) {
+    const hz = 1000 * (lastTimes.length - 1) / (now - lastTimes[0]);
+    $("tRate").textContent = hz.toFixed(1) + " Hz";
+  }
+}
+
 function onEvent(e) {
+  if (e.mode === "rssi") { onRssiEvent(e); return; }
   last = e; count++;
   if (e.x !== undefined) {
     trail.push([e.x, e.y]);
@@ -283,9 +342,17 @@ function connect() {
 async function init() {
   CFG = await (await fetch("/api/config")).json();
   heat = new Float64Array(heatCols * heatRows);
-  $("modePill").textContent = "mode: " + (CFG.mode === "sim" ? "simulated person" : "hardware");
+  $("modePill").textContent = "mode: " + (CFG.mode === "sim" ? "simulated person"
+    : CFG.mode === "rssi" ? "real Wi-Fi (this device)" : "hardware");
   $("roomPill").textContent = `room: ${CFG.room.name} (${CFG.room.width}×${CFG.room.depth} m)`;
   if (CFG.mode === "sim") $("gtLegend").hidden = false;
+  if (CFG.mode === "rssi") {
+    $("signalCard").hidden = false;
+    $("mapCard").hidden = true;
+    // Repurpose tile labels for signal mode.
+    document.querySelector("#tPos").previousElementSibling.textContent = "RSSI";
+    document.querySelector("#tErr").previousElementSibling.textContent = "Motion level";
+  }
   resize(); draw(); connect();
 }
 window.addEventListener("resize", () => { resize(); draw(); });

@@ -6,6 +6,12 @@ See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 
 ## Now (software, no hardware required)
 
+- [ ] **Run `scripts/wifi_live.py` on a real laptop** (container has no
+      wireless): confirm the RSSI backend detection on the user's actual
+      OS, tune MotionDetector threshold/hold to that environment.
+- [ ] Body view polish (optional): camera orbit control, second ghost
+      avatar for ground truth in sim mode, trail ribbon on the floor.
+
 - [ ] **Doppler / STFT features** (plan §11.1): add short-time Fourier
       spectrum of per-link principal amplitude component to
       `preprocess/pipeline.py:extract_window_features`; ablate vs current
@@ -56,6 +62,9 @@ See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 
 ## Done
 
+- [x] Real-Wi-Fi RSSI live mode + motion/presence detection + signal panel
+      (2026-07-29)
+- [x] /body wireframe avatar view, sim + rssi modes (2026-07-29)
 - [x] Core package: config, simulator, preprocessing, models, tracking,
       eval, persistence (2026-07-29)
 - [x] Leakage-aware splits + full metrics (2026-07-29)

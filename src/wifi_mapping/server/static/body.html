@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wi-Fi Human Mapping — Body View</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --border: rgba(255,255,255,.10);
+    --good: #0ca30c; --critical: #d03b3b;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh; padding: 16px;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  h1 { font-size: 17px; font-weight: 650; }
+  a { color: var(--ink-2); }
+  .pill {
+    font-size: 12px; color: var(--ink-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px; background: var(--surface);
+  }
+  .pill .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--critical); margin-right: 6px; }
+  .pill.live .dot { background: var(--good); }
+  .note { font-size: 12px; color: var(--muted); margin: 8px 2px 0; max-width: 900px; }
+  .stack { display: flex; flex-direction: column; gap: 4px; max-width: 940px; }
+  canvas { display: block; width: 100%; border-radius: 8px; }
+  #top { background: #e8e6e1; }
+  #bottom { background: #000; }
+  .hud {
+    position: fixed; right: 18px; top: 60px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+    font-size: 12px; color: var(--ink-2); min-width: 150px;
+  }
+  .hud b { color: var(--ink); font-size: 15px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Body View</h1>
+  <span class="pill" id="status"><span class="dot"></span><span id="statusText">connecting…</span></span>
+  <span class="pill" id="modePill">mode: —</span>
+  <span class="pill"><a href="/">← floor-plan dashboard</a></span>
+</header>
+<div class="stack">
+  <canvas id="top" width="940" height="430"></canvas>
+  <canvas id="bottom" width="940" height="430"></canvas>
+</div>
+<div class="hud" id="hud">
+  <div>position <b id="hPos">—</b></div>
+  <div>zone <b id="hZone">—</b></div>
+  <div>speed <b id="hSpd">—</b></div>
+  <div id="hRssiRow" hidden>rssi <b id="hRssi">—</b></div>
+  <div id="hMotionRow" hidden>motion <b id="hMotion">—</b></div>
+</div>
+<p class="note" id="noteText">
+  Avatar visualization of the live localization output: the wireframe figure
+  stands at the model's predicted (x, y) and animates with the estimated
+  movement. This is <em>not</em> pose estimation from Wi-Fi — body shape and
+  limb motion are synthesized for display (thesis plan: pose sensing is out
+  of scope; position and movement are the measured quantities).
+</p>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+// ---------------------------------------------------------------- viridis
+const VIRIDIS = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],[33,144,141],
+                 [39,173,129],[92,200,99],[170,220,50],[253,231,37]];
+function viridis(t, alpha = 1) {
+  t = Math.min(1, Math.max(0, t));
+  const i = Math.min(VIRIDIS.length - 2, Math.floor(t * (VIRIDIS.length - 1)));
+  const f = t * (VIRIDIS.length - 1) - i;
+  const c = VIRIDIS[i].map((v, k) => Math.round(v + f * (VIRIDIS[i + 1][k] - v)));
+  return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+}
+
+// ------------------------------------------------------------ 3D helpers
+const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const mul = (a, s) => [a[0]*s, a[1]*s, a[2]*s];
+const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm = a => { const l = Math.hypot(...a) || 1; return mul(a, 1/l); };
+
+function makeCamera(eye, target, f, cx, cy) {
+  const fwd = norm(sub(target, eye));
+  const right = norm(cross(fwd, [0,0,1]));
+  const up = cross(right, fwd);
+  return p => {
+    const d = sub(p, eye);
+    const depth = dot(d, fwd);
+    if (depth < 0.2) return null;
+    return { x: cx + f * dot(d, right) / depth,
+             y: cy - f * dot(d, up) / depth, depth };
+  };
+}
+
+// --------------------------------------------------- wireframe primitives
+// Every primitive returns an array of polylines; a polyline is [[x,y,z],...].
+function ellipsoid(c, rx, ry, rz, nLat = 7, nLon = 10, yaw = 0) {
+  const lines = [];
+  const cy_ = Math.cos(yaw), sy_ = Math.sin(yaw);
+  const pt = (th, ph) => {
+    let x = rx * Math.cos(th) * Math.cos(ph);
+    let y = ry * Math.cos(th) * Math.sin(ph);
+    const z = rz * Math.sin(th);
+    return [c[0] + x*cy_ - y*sy_, c[1] + x*sy_ + y*cy_, c[2] + z];
+  };
+  for (let i = 1; i < nLat; i++) {           // latitude rings
+    const th = -Math.PI/2 + Math.PI * i / nLat, ring = [];
+    for (let j = 0; j <= nLon; j++) ring.push(pt(th, 2*Math.PI*j/nLon));
+    lines.push(ring);
+  }
+  for (let j = 0; j < nLon; j++) {           // meridians
+    const ph = 2*Math.PI*j/nLon, mer = [];
+    for (let i = 0; i <= nLat; i++) mer.push(pt(-Math.PI/2 + Math.PI*i/nLat, ph));
+    lines.push(mer);
+  }
+  return lines;
+}
+
+function limb(p0, p1, r0, r1, nRing = 4, nLon = 6) {
+  const axis = sub(p1, p0), len = Math.hypot(...axis);
+  if (len < 1e-6) return [];
+  const a = mul(axis, 1/len);
+  const ref = Math.abs(a[2]) < 0.9 ? [0,0,1] : [1,0,0];
+  const u = norm(cross(a, ref)), v = cross(a, u);
+  const lines = [], longs = [];
+  for (let j = 0; j < nLon; j++) longs.push([]);
+  for (let i = 0; i <= nRing; i++) {
+    const t = i / nRing, r = r0 + (r1 - r0) * t;
+    const centre = add(p0, mul(axis, t)), ring = [];
+    for (let j = 0; j <= nLon; j++) {
+      const ph = 2*Math.PI*j/nLon;
+      const p = add(centre, add(mul(u, r*Math.cos(ph)), mul(v, r*Math.sin(ph))));
+      ring.push(p);
+      if (j < nLon) longs[j].push(p);
+    }
+    lines.push(ring);
+  }
+  return lines.concat(longs);
+}
+
+// -------------------------------------------------------------- the body
+// Local frame: x lateral (right+), y forward, z up. Returns world polylines.
+function buildBody(pos, heading, phase, swing) {
+  const cy_ = Math.cos(heading), sy_ = Math.sin(heading);
+  const W = p => [pos[0] + p[0]*cy_ - p[1]*sy_, pos[1] + p[0]*sy_ + p[1]*cy_, p[2]];
+  const lines = [];
+  const put = ls => ls.forEach(l => lines.push(l.map(W)));
+
+  const armA = Math.sin(phase) * 0.7 * swing;
+  const legA = Math.sin(phase) * 0.55 * swing;
+  const bob = 0.02 * Math.abs(Math.cos(phase)) * swing;
+
+  put(ellipsoid([0, 0, 1.66 + bob], 0.105, 0.12, 0.13, 6, 8, heading));  // head
+  put(ellipsoid([0, 0, 1.24 + bob], 0.175, 0.115, 0.30, 8, 10, 0));      // torso
+  put(ellipsoid([0, 0, 0.93 + bob], 0.155, 0.105, 0.13, 4, 8, 0));       // pelvis
+
+  for (const s of [-1, 1]) {                                   // arms
+    const sh = [0.22*s, 0, 1.47 + bob];
+    const sw = s > 0 ? armA : -armA;
+    const el = add(sh, [0.02*s, 0.30*Math.sin(sw), -0.30*Math.cos(sw)]);
+    const bend = sw * 0.5 + 0.35;
+    const wr = add(el, [0.01*s, 0.27*Math.sin(sw + bend), -0.27*Math.cos(sw + bend)]);
+    put(limb(sh, el, 0.055, 0.042));
+    put(limb(el, wr, 0.042, 0.033));
+  }
+  for (const s of [-1, 1]) {                                   // legs
+    const hip = [0.10*s, 0, 0.90 + bob];
+    const sw = s > 0 ? -legA : legA;
+    const kn = add(hip, [0, 0.44*Math.sin(sw), -0.44*Math.cos(sw)]);
+    const knBend = Math.max(0, -sw) * 1.1;
+    const an = add(kn, [0, 0.42*Math.sin(sw - knBend), -0.42*Math.cos(sw - knBend)]);
+    put(limb(hip, kn, 0.075, 0.055));
+    put(limb(kn, an, 0.055, 0.042));
+    put(limb(an, add(an, [0, 0.14, 0.02]), 0.04, 0.035));      // foot
+  }
+  return lines;
+}
+
+// ---------------------------------------------------------------- render
+let CFG = null;
+const topC = $("top"), botC = $("bottom");
+const tctx = topC.getContext("2d"), bctx = botC.getContext("2d");
+
+// Live state, smoothed for animation.
+const st = { x: 2.5, y: 3.0, tx: 2.5, ty: 3.0, heading: 0, phase: 0,
+             speed: 0, swing: 0, mode: null, zone: null, err: null,
+             rssi: null, motion: 0, presence: true, last: performance.now() };
+
+function drawScene(ctx, canvas, dark) {
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const eye = [CFG.room.width/2, -3.6, 1.9];
+  const target = [CFG.room.width/2, CFG.room.depth*0.42, 1.0];
+  const cam = makeCamera(eye, target, h * 1.35, w/2, h*0.46);
+
+  if (!dark) {  // room: floor grid + back wall edge, recessive
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(80,78,72,0.28)";
+    const line = (a, b) => {
+      const p = cam(a), q = cam(b);
+      if (p && q) { ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+    };
+    for (let gx = 0; gx <= CFG.room.width + 1e-6; gx += CFG.room.width / CFG.grid.cols)
+      line([gx, 0, 0], [gx, CFG.room.depth, 0]);
+    for (let gy = 0; gy <= CFG.room.depth + 1e-6; gy += CFG.room.depth / CFG.grid.rows)
+      line([0, gy, 0], [CFG.room.width, gy, 0]);
+    ctx.strokeStyle = "rgba(80,78,72,0.45)";
+    line([0,CFG.room.depth,0],[0,CFG.room.depth,2.6]);
+    line([CFG.room.width,CFG.room.depth,0],[CFG.room.width,CFG.room.depth,2.6]);
+    line([0,CFG.room.depth,2.6],[CFG.room.width,CFG.room.depth,2.6]);
+  }
+
+  if (st.mode === "rssi" && !st.presence) {
+    ctx.fillStyle = dark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.4)";
+    ctx.font = "14px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText("no motion detected on the Wi-Fi link", w/2, h/2);
+    ctx.textAlign = "start";
+    return;
+  }
+
+  const lines = buildBody([st.x, st.y, 0], st.heading, st.phase, st.swing);
+  const alpha = st.mode === "rssi"
+    ? 0.35 + 0.65 * Math.min(1, st.motion / 2.5) : 1.0;
+  ctx.lineWidth = 1.4;
+  // Depth-sort polylines so far lines draw first (painter's order).
+  const projected = [];
+  for (const poly of lines) {
+    const pts = poly.map(cam);
+    if (pts.some(p => !p)) continue;
+    projected.push({ pts, z: poly.reduce((s, p) => s + p[2], 0) / poly.length,
+                     depth: pts.reduce((s, p) => s + p.depth, 0) / pts.length });
+  }
+  projected.sort((a, b) => b.depth - a.depth);
+  for (const { pts, z } of projected) {
+    ctx.strokeStyle = viridis(z / 1.85, alpha);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const p of pts) ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  }
+  // Ground shadow.
+  const gp = cam([st.x, st.y, 0.01]);
+  if (gp) {
+    ctx.fillStyle = dark ? "rgba(120,255,170,0.10)" : "rgba(0,0,0,0.12)";
+    ctx.beginPath();
+    ctx.ellipse(gp.x, gp.y, 34 / (gp.depth/5), 10 / (gp.depth/5), 0, 0, 7);
+    ctx.fill();
+  }
+}
+
+function animate() {
+  const now = performance.now(), dt = Math.min(0.1, (now - st.last)/1000);
+  st.last = now;
+  // Ease towards the latest predicted position.
+  const dx = st.tx - st.x, dy = st.ty - st.y;
+  const dist = Math.hypot(dx, dy);
+  const k = 1 - Math.exp(-dt * 2.2);
+  st.x += dx * k; st.y += dy * k;
+  const v = dist * 2.2;                       // implied speed (m/s)
+  st.speed += (v - st.speed) * 0.12;
+  if (dist > 0.03) {
+    const targetHeading = Math.atan2(dy, dx) - Math.PI/2;
+    let dh = targetHeading - st.heading;
+    while (dh > Math.PI) dh -= 2*Math.PI;
+    while (dh < -Math.PI) dh += 2*Math.PI;
+    st.heading += dh * Math.min(1, dt*4);
+  }
+  const targetSwing = st.mode === "rssi"
+    ? Math.min(1, st.motion / 2.0) : Math.min(1, st.speed / 0.9);
+  st.swing += (targetSwing - st.swing) * 0.1;
+  st.phase += dt * (st.mode === "rssi" ? 3.5 : 2.0 + 7.0 * Math.min(1.2, st.speed));
+  if (CFG) { drawScene(tctx, topC, false); drawScene(bctx, botC, true); }
+  requestAnimationFrame(animate);
+}
+
+// ------------------------------------------------------------------ live
+function onEvent(e) {
+  st.mode = e.mode;
+  $("modePill").textContent = "mode: " + (e.mode === "sim" ? "simulated person"
+    : e.mode === "rssi" ? "real Wi-Fi (this device)" : "hardware");
+  if (e.mode === "rssi") {
+    st.rssi = e.rssi; st.motion = e.motion; st.presence = e.presence;
+    st.tx = CFG ? CFG.room.width/2 : 2.5;
+    st.ty = CFG ? CFG.room.depth*0.45 : 3.0;
+    $("hRssiRow").hidden = false; $("hMotionRow").hidden = false;
+    $("hRssi").textContent = e.rssi.toFixed(0) + " dBm";
+    $("hMotion").textContent = e.motion.toFixed(2) + " dB";
+    $("hPos").textContent = "n/a"; $("hZone").textContent = "n/a";
+    $("hSpd").textContent = e.presence ? "motion" : "quiet";
+    return;
+  }
+  if (e.x !== undefined) { st.tx = e.x; st.ty = e.y; }
+  st.zone = e.zone;
+  $("hPos").textContent = e.x !== undefined
+    ? `${e.x.toFixed(2)}, ${e.y.toFixed(2)} m` : "—";
+  $("hZone").textContent = e.zone ?? "—";
+  $("hSpd").textContent = st.speed.toFixed(2) + " m/s";
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
+                           + location.host + "/ws");
+  ws.onopen = () => { $("status").classList.add("live"); $("statusText").textContent = "live"; };
+  ws.onclose = () => {
+    $("status").classList.remove("live"); $("statusText").textContent = "reconnecting…";
+    setTimeout(connect, 1500);
+  };
+  ws.onmessage = m => onEvent(JSON.parse(m.data));
+  setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 15000);
+}
+
+async function init() {
+  CFG = await (await fetch("/api/config")).json();
+  if (CFG.mode === "rssi") {
+    $("noteText").innerHTML = "Real-signal mode: the RSSI of this machine's "
+      + "connected Wi-Fi link drives the motion meter — walk between the "
+      + "computer and the router to see the avatar react. A single link has "
+      + "no position information, so the figure stays centred; localization "
+      + "requires the multi-link ESP32 setup or the simulator demo.";
+    st.tx = CFG.room.width/2; st.ty = CFG.room.depth*0.45;
+  }
+  connect();
+}
+init();
+animate();
+</script>
+</body>
+</html>
