@@ -288,7 +288,21 @@ function animate() {
 function onEvent(e) {
   st.mode = e.mode;
   $("modePill").textContent = "mode: " + (e.mode === "sim" ? "simulated person"
-    : e.mode === "rssi" ? "real Wi-Fi (this device)" : "hardware");
+    : e.mode === "rssi" ? "real Wi-Fi (this device)"
+    : e.mode === "router" ? "real Wi-Fi (router)" : "hardware");
+  if (e.mode === "router") {
+    // Body view has no per-device layout; treat max link motion like rssi.
+    const maxMotion = Math.max(0, ...e.stations.map(s => s.motion));
+    st.mode = "rssi"; st.motion = maxMotion;
+    st.presence = e.stations.some(s => s.presence);
+    st.tx = CFG ? CFG.room.width/2 : 2.5;
+    st.ty = CFG ? CFG.room.depth*0.45 : 3.0;
+    $("hRssiRow").hidden = true; $("hMotionRow").hidden = false;
+    $("hMotion").textContent = maxMotion.toFixed(2) + " dB";
+    $("hPos").textContent = "n/a"; $("hZone").textContent = "n/a";
+    $("hSpd").textContent = st.presence ? "motion" : "quiet";
+    return;
+  }
   if (e.mode === "rssi") {
     st.rssi = e.rssi; st.motion = e.motion; st.presence = e.presence;
     st.tx = CFG ? CFG.room.width/2 : 2.5;

@@ -5,6 +5,26 @@ supersede.
 
 ---
 
+## 2026-07-29 c — Router integration
+
+**D14. Router polling over ssh + `iw`, not vendor APIs.** Per-station RSSI
+has no cross-vendor API; the one near-universal interface is `iw dev <if>
+station dump` on OpenWrt-class firmware. We poll it over key-auth ssh
+(subprocess, BatchMode) rather than shipping vendor-specific scrapers for
+stock firmwares — those are brittle, undocumented, and often absent.
+Stock-router users get three documented paths (ROUTER_GUIDE.md): flash
+OpenWrt, add a cheap OpenWrt sensing AP, or hostapd on the laptop
+(`--local`). Monitor-mode packet sniffing was rejected: needs root +
+monitor-capable NIC and breaks normal Wi-Fi use while running.
+
+**D15. Router mode claims "which link", never coordinates.** Per-link RSSI
+disturbance localizes to link regions only. The dashboard therefore draws
+link lines and activity halos — not a person marker — and the docs say so.
+Fusing multiple disturbed links into rough (x,y) is possible future work
+but needs real data to justify.
+
+---
+
 ## 2026-07-29 b — Real-signal mode and body view
 
 **D11. Real Wi-Fi = RSSI presence sensing, stated plainly.** The user asked

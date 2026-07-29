@@ -123,6 +123,13 @@
         <tbody id="logBody"></tbody>
       </table>
     </div>
+    <div class="card" id="stationsCard" hidden>
+      <h2>Connected devices (router links)</h2>
+      <table aria-label="Connected devices">
+        <thead><tr><th>device</th><th>rssi</th><th>motion</th><th>state</th></tr></thead>
+        <tbody id="stationsBody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -154,6 +161,7 @@ function mix(a, b, t) {
 
 function draw() {
   if (!CFG) return;
+  if (CFG.mode === "router") { drawRouterMap(); return; }
   const W = CFG.room.width, D = CFG.room.depth;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -251,6 +259,91 @@ function draw() {
   ctx.fillText(D + " m", X(0) - 28, Y(D) + 4);
 }
 
+// ---- router mode: per-device links on the floor plan ------------------
+let stations = [];
+function drawRouterMap() {
+  const W = CFG.room.width, D = CFG.room.depth;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Room + grid (recessive).
+  if ($("showGrid").checked) {
+    ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+    for (let c = 1; c < CFG.grid.cols; c++) {
+      ctx.beginPath(); ctx.moveTo(X(c*W/CFG.grid.cols), Y(0));
+      ctx.lineTo(X(c*W/CFG.grid.cols), Y(D)); ctx.stroke();
+    }
+    for (let r = 1; r < CFG.grid.rows; r++) {
+      ctx.beginPath(); ctx.moveTo(X(0), Y(r*D/CFG.grid.rows));
+      ctx.lineTo(X(W), Y(r*D/CFG.grid.rows)); ctx.stroke();
+    }
+  }
+  ctx.strokeStyle = css("--axis"); ctx.lineWidth = 1.5;
+  ctx.strokeRect(X(0), Y(D), W*scale, D*scale);
+
+  const rp = (CFG.router && CFG.router.position) || [W/2, 0.15];
+  // Links first (under the nodes): color/width by motion level.
+  for (const s of stations) {
+    if (!s.pos) continue;
+    const t = Math.min(1, s.motion / 2.5);
+    ctx.strokeStyle = s.presence ? css("--accent") : css("--grid");
+    ctx.globalAlpha = s.presence ? 0.5 + 0.5*t : 0.8;
+    ctx.lineWidth = 1.5 + 5*t;
+    ctx.beginPath(); ctx.moveTo(X(rp[0]), Y(rp[1]));
+    ctx.lineTo(X(s.pos[0]), Y(s.pos[1])); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // Activity halo at the device end.
+    if (s.presence) {
+      ctx.fillStyle = css("--accent"); ctx.globalAlpha = 0.15 + 0.25*t;
+      ctx.beginPath(); ctx.arc(X(s.pos[0]), Y(s.pos[1]), 16 + 14*t, 0, 7);
+      ctx.fill(); ctx.globalAlpha = 1;
+    }
+  }
+  // Router node.
+  ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui";
+  ctx.beginPath();
+  ctx.moveTo(X(rp[0]), Y(rp[1]) - 8); ctx.lineTo(X(rp[0]) - 7, Y(rp[1]) + 6);
+  ctx.lineTo(X(rp[0]) + 7, Y(rp[1]) + 6); ctx.closePath(); ctx.fill();
+  ctx.fillText("router", X(rp[0]) + 10, Y(rp[1]) + 4);
+  // Device nodes.
+  for (const s of stations) {
+    if (!s.pos) continue;
+    ctx.fillStyle = s.presence ? css("--accent") : css("--muted");
+    ctx.fillRect(X(s.pos[0]) - 5, Y(s.pos[1]) - 5, 10, 10);
+    ctx.fillStyle = css("--ink-2");
+    ctx.fillText(s.name, X(s.pos[0]) + 9, Y(s.pos[1]) + 4);
+  }
+}
+
+function onRouterEvent(e) {
+  count++;
+  stations = e.stations;
+  const active = stations.filter(s => s.presence);
+  const maxMotion = stations.reduce((m, s) => Math.max(m, s.motion), 0);
+  $("tZone").textContent = active.length;
+  $("tPos").textContent = String(stations.length);
+  $("tErr").textContent = maxMotion.toFixed(2) + " dB";
+  $("tLat").textContent = active.length
+    ? active.map(s => s.name).join(", ").slice(0, 18) : "—";
+  $("tCount").textContent = count;
+  const now = performance.now();
+  lastTimes.push(now); while (lastTimes.length > 12) lastTimes.shift();
+  if (lastTimes.length > 3) {
+    const hz = 1000 * (lastTimes.length - 1) / (now - lastTimes[0]);
+    $("tRate").textContent = hz.toFixed(1) + " Hz";
+  }
+  const body = $("stationsBody");
+  body.innerHTML = "";
+  for (const s of stations) {
+    const row = document.createElement("tr");
+    const bar = Math.min(100, Math.round(s.motion / 3 * 100));
+    row.innerHTML = `<td>${s.name}</td><td>${s.rssi.toFixed(0)} dBm</td>`
+      + `<td><div style="background:var(--grid);border-radius:3px;width:70px;height:8px">`
+      + `<div style="background:var(--accent);width:${bar}%;height:8px;border-radius:3px"></div></div></td>`
+      + `<td>${s.presence ? "● motion" : "quiet"}</td>`;
+    body.appendChild(row);
+  }
+  drawRouterMap();
+}
+
 // ---- real-Wi-Fi (RSSI) mode: live signal sparkline -------------------
 const rssiHist = [];
 function onRssiEvent(e) {
@@ -297,6 +390,7 @@ function onRssiEvent(e) {
 
 function onEvent(e) {
   if (e.mode === "rssi") { onRssiEvent(e); return; }
+  if (e.mode === "router") { onRouterEvent(e); return; }
   last = e; count++;
   if (e.x !== undefined) {
     trail.push([e.x, e.y]);
@@ -343,7 +437,8 @@ async function init() {
   CFG = await (await fetch("/api/config")).json();
   heat = new Float64Array(heatCols * heatRows);
   $("modePill").textContent = "mode: " + (CFG.mode === "sim" ? "simulated person"
-    : CFG.mode === "rssi" ? "real Wi-Fi (this device)" : "hardware");
+    : CFG.mode === "rssi" ? "real Wi-Fi (this device)"
+    : CFG.mode === "router" ? "real Wi-Fi (router, all devices)" : "hardware");
   $("roomPill").textContent = `room: ${CFG.room.name} (${CFG.room.width}×${CFG.room.depth} m)`;
   if (CFG.mode === "sim") $("gtLegend").hidden = false;
   if (CFG.mode === "rssi") {
@@ -352,6 +447,19 @@ async function init() {
     // Repurpose tile labels for signal mode.
     document.querySelector("#tPos").previousElementSibling.textContent = "RSSI";
     document.querySelector("#tErr").previousElementSibling.textContent = "Motion level";
+  }
+  if (CFG.mode === "router") {
+    $("stationsCard").hidden = false;
+    document.querySelector("#tZone").previousElementSibling.textContent = "Active links";
+    document.querySelector("#tPos").previousElementSibling.textContent = "Devices";
+    document.querySelector("#tErr").previousElementSibling.textContent = "Max motion";
+    document.querySelector("#tLat").previousElementSibling.textContent = "Active names";
+    // Hide sim-specific chrome.
+    $("gtLegend").hidden = true;
+    document.querySelector("#mapCard .legend").innerHTML =
+      '<span><span class="sw" style="background:var(--accent)"></span> link with motion '
+      + '(width = level)</span><span><span style="color:var(--muted)">▲</span> router '
+      + '&nbsp; <span style="color:var(--muted)">■</span> device</span>';
   }
   resize(); draw(); connect();
 }

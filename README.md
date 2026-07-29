@@ -29,10 +29,18 @@ person walking the room — predictions and live localization error on screen.
 The **/body** page adds a wireframe-avatar view of the live track (dual-pane,
 mesh-on-black style). Full walkthrough: **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
 
-**Real signal, today, no ESP32:** on a Wi-Fi-connected laptop,
-`python scripts/wifi_live.py` runs live presence/motion sensing on the
-actual RSSI of the connected link (walk between laptop and router and watch
-the dashboard react). Localization still requires the multi-link setup.
+**Real signal, today, no ESP32:**
+
+- `python scripts/wifi_live.py` — presence/motion sensing on the laptop's
+  own connected-link RSSI (single link).
+- `python scripts/router_live.py` — **whole-home mode**: polls the router
+  for the RSSI of *every* connected device and maps per-link motion onto
+  the floor plan (which link region is occupied). Works with OpenWrt-class
+  routers over ssh; `--demo` tries the UI without any router. See
+  [docs/ROUTER_GUIDE.md](docs/ROUTER_GUIDE.md).
+
+Precise (x, y) localization still requires the multi-link CSI setup
+(simulator today, ESP32 when hardware arrives).
 
 With real ESP32 hardware: **[docs/HARDWARE_GUIDE.md](docs/HARDWARE_GUIDE.md)**
 and [firmware/esp32-csi/README.md](firmware/esp32-csi/README.md).

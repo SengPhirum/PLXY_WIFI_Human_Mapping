@@ -62,3 +62,20 @@ paths:
 server:
   host: "127.0.0.1"
   port: 8000
+
+# Router-based multi-device sensing (scripts/router_live.py).
+# Works with OpenWrt/DD-WRT-class routers reachable over ssh (key auth).
+# "devices" maps station MACs to a label and an approximate floor-plan
+# position so per-link motion can be drawn on the map; unmapped stations
+# still appear in the table.
+router:
+  host: "192.168.1.1"
+  user: "root"
+  interfaces: ["wlan0", "wlan1"]
+  poll_hz: 2.0
+  position: [2.5, 0.15]        # router's own spot on the floor plan
+  threshold: 0.8               # motion-level (dB) that counts as activity
+  devices:
+    # "aa:bb:cc:dd:ee:ff": { name: "TV",       pos: [4.5, 5.5] }
+    # "11:22:33:44:55:66": { name: "Desk PC",  pos: [0.6, 4.8] }
+    {}

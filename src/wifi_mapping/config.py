@@ -100,6 +100,9 @@ class Server:
 
 @dataclass
 class Config:
+    # Router-based sensing settings — kept as a plain dict because the
+    # shape (device maps, credentials) is deployment-specific.
+    router: dict = field(default_factory=dict)
     room: Room = field(default_factory=Room)
     grid: Grid = field(default_factory=Grid)
     links: Links = field(default_factory=Links)
@@ -157,6 +160,7 @@ def load_config(path: str | Path | None = None) -> Config:
             tx=_node(raw["links"]["tx"]),
             rx=[_node(r) for r in raw["links"]["rx"]],
         )
+    cfg.router = raw.get("router") or {}
     for key, cls, attr in [
         ("signal", Signal, "signal"),
         ("preprocess", Preprocess, "preprocess"),

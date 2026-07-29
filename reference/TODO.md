@@ -8,7 +8,16 @@ See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 
 - [ ] **Run `scripts/wifi_live.py` on a real laptop** (container has no
       wireless): confirm the RSSI backend detection on the user's actual
-      OS, tune MotionDetector threshold/hold to that environment.
+      OS, tune MotionDetector threshold/hold to that environment. User's
+      first test failed — walk through SETUP_GUIDE §3b troubleshooting
+      table (VM/WSL? flat RSSI from driver caching? power-save?).
+- [ ] **Run `scripts/router_live.py` against a real router.** Needs
+      OpenWrt/GL.iNet/DD-WRT-class ssh access (ROUTER_GUIDE.md). If the
+      user's router is a stock ISP box, the cheapest path is a $20–30
+      OpenWrt AP as dedicated sensing head — decide and order early.
+- [ ] Router mode upgrades once real data flows: per-link adaptive
+      thresholds, station sparklines in the dashboard, activity history
+      timeline, optional MQTT/webhook output for home automation.
 - [ ] Body view polish (optional): camera orbit control, second ghost
       avatar for ground truth in sim mode, trail ribbon on the floor.
 

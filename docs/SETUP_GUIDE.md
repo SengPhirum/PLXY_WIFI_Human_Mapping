@@ -111,6 +111,32 @@ information, and laptops cannot expose CSI without special firmware — so
 there is no localization here. Localization = simulator demo today, ESP32
 multi-link CSI when the hardware arrives ([HARDWARE_GUIDE.md](HARDWARE_GUIDE.md)).
 
+**If `wifi_live.py` "doesn't work" for you, check in this order:**
+
+| Symptom | Cause / fix |
+|---|---|
+| `No wireless interface found` | You're in a VM/WSL/container or on Ethernet — these have no Wi-Fi device. Run on the host OS of a Wi-Fi-connected laptop. WSL2 specifically cannot see the Wi-Fi adapter; use native Windows Python there. |
+| Trace is a flat line, never any motion | Some drivers cache RSSI aggressively. Move *between* laptop and router (not beside), within ~3 m of the straight line. Generate link traffic (`ping 192.168.1.1` in another terminal) — RSSI updates with traffic. |
+| Motion never triggers presence | Fluctuation below threshold — the detector needs >0.6 dB excess std. Try a closer router, 2.4 GHz instead of 5 GHz, or the router mode below (multiple links = much better sensitivity). |
+| Trace updates very slowly | Power-save NIC. Disable Wi-Fi power management (`sudo iw dev wlan0 set power_save off`). |
+
+## 3c. Whole-home sensing through the router (all connected devices)
+
+The single laptop link above is the weakest possible setup. The **router**
+sees the RSSI of *every* connected device — each device↔router link is a
+sensing tripwire crossing a different part of the home:
+
+```bash
+python scripts/router_live.py --demo    # try the UI right now, no router needed
+python scripts/router_live.py           # real: OpenWrt-class router via ssh
+```
+
+The dashboard switches to an activity map: device markers on the floor
+plan, router→device link lines that thicken and light up with live motion
+on that link, plus a per-device table (RSSI, motion, state). Requirements,
+router compatibility (OpenWrt / GL.iNet / DD-WRT; what to do with stock ISP
+boxes), MAC→position mapping, and tuning: **[ROUTER_GUIDE.md](ROUTER_GUIDE.md)**.
+
 ## 4. Reproduce the baseline comparison (thesis §14)
 
 ```bash

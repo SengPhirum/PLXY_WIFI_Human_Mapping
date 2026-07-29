@@ -14,6 +14,9 @@ Three live sources:
   motion/presence detection. No localization — a single laptop link
   carries no position information; the dashboard switches to a signal
   panel and the body view shows a presence-reactive avatar.
+- ``mode="router"`` — REAL Wi-Fi via the router: per-station RSSI of every
+  connected device (collect/router_live.py), per-link motion detection,
+  activity drawn on the floor plan for devices with configured positions.
 
 Endpoints:
     GET  /               dashboard (single-file HTML/JS)
@@ -70,7 +73,8 @@ class Broadcaster:
 
 def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
                sim_seed: int | None = None,
-               wifi_interface: str | None = None) -> FastAPI:
+               wifi_interface: str | None = None,
+               router_transport=None) -> FastAPI:
     app = FastAPI(title="Wi-Fi Human Mapping", version="0.1.0")
     hub = Broadcaster()
     state: dict[str, Any] = {
@@ -128,12 +132,44 @@ def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
             state["predictions"] += 1
             await hub.send({**reading, "mode": "rssi"})
 
+    async def router_loop() -> None:
+        """Per-device RSSI from the router → per-link activity events."""
+        from ..collect.router_live import RouterMonitor
+
+        rcfg = cfg.router or {}
+        monitor = RouterMonitor(
+            router_transport,
+            poll_hz=float(rcfg.get("poll_hz", 2.0)),
+            threshold=float(rcfg.get("threshold", 0.8)),
+        )
+        monitor.start()
+        state["backend"] = "router"
+        devices = rcfg.get("devices") or {}
+        last_sent = 0.0
+        while True:
+            await asyncio.sleep(1.0 / (2 * monitor.poll_hz))
+            reading = monitor.latest()
+            if reading is None or reading["t"] <= last_sent:
+                continue
+            last_sent = reading["t"]
+            for s in reading["stations"]:
+                meta = devices.get(s["mac"]) or {}
+                s["name"] = meta.get("name", s["mac"][-8:])
+                if "pos" in meta:
+                    s["pos"] = meta["pos"]
+            state["frames"] += 1
+            state["predictions"] += 1
+            await hub.send({"t": reading["t"], "mode": "router",
+                            "stations": reading["stations"]})
+
     @app.on_event("startup")
     async def _startup() -> None:
         if mode == "sim":
             asyncio.create_task(sim_loop())
         elif mode == "rssi":
             asyncio.create_task(rssi_loop())
+        elif mode == "router":
+            asyncio.create_task(router_loop())
 
     # ------------------------------------------------------------ endpoints
 
@@ -155,6 +191,10 @@ def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
             "rx": [{"id": r.id, "pos": list(r.pos)} for r in cfg.links.rx],
             "mode": mode,
             "update_hz": cfg.signal.sample_rate_hz / cfg.preprocess.window_step,
+            "router": {
+                "position": (cfg.router or {}).get("position"),
+                "devices": (cfg.router or {}).get("devices") or {},
+            },
         })
 
     @app.get("/api/status")

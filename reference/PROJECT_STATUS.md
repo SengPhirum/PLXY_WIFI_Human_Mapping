@@ -5,10 +5,11 @@
 > re-deriving anything. Read this first, then `TODO.md` for next actions.
 > Keep this file updated at the end of every working session.
 
-**Last updated:** 2026-07-29 (second session)
+**Last updated:** 2026-07-29 (third session)
 **State:** Software prototype complete and verified end-to-end on simulated
-data; real-signal RSSI mode and wireframe body view added. No CSI hardware
-yet (per plan timeline, purchase is month 3).
+data; real-signal modes added: single-link laptop RSSI, and router-based
+multi-device sensing (per-link activity map). No CSI hardware yet (per plan
+timeline, purchase is month 3).
 
 ## What this project is
 
@@ -58,6 +59,14 @@ Full instructions: `docs/SETUP_GUIDE.md`. Codebase map:
   std vs adaptive quiet baseline; dashboard switches to a live signal
   sparkline + presence pill. Presence/motion ONLY — one link has no
   position information; this is deliberately scoped and documented.
+- **Router mode** (`collect/router_live.py`, server `mode="router"`,
+  `scripts/router_live.py`): polls per-station RSSI for every device
+  connected to the router (`iw station dump` over ssh — OpenWrt-class —
+  or locally when this machine is the AP; `--demo` synthesizes stations),
+  per-link MotionDetector, dashboard activity map (router→device link
+  lines coloured/thickened by live motion, device table). Config section
+  `router:` holds host/user/interfaces/threshold and MAC→{name,pos} map.
+  This is link-disturbance sensing: presence + which-link, not (x,y).
 - **Body view** (`/body`, `server/static/body.html`): dual-pane wireframe
   humanoid (perspective room pane + mesh-on-black pane, viridis-coloured
   by height, painter-sorted polylines) standing at the live predicted
@@ -130,6 +139,14 @@ hardware data.
 
 ## Session log
 
+- **2026-07-29 c** (Claude Code): user reported wifi_live "not working" on
+  their test (likely VM/flat-RSSI — troubleshooting table added to
+  SETUP_GUIDE §3b) and asked for router integration to sense all connected
+  devices. Added router mode end-to-end (parser, transports, per-station
+  motion, dashboard activity map, docs/ROUTER_GUIDE.md, tests → 26
+  passing, UI verified via --demo screenshots). Real-router run still
+  pending on user's hardware: needs OpenWrt-class shell access — stock ISP
+  boxes can't expose per-station RSSI (documented options in the guide).
 - **2026-07-29 b** (Claude Code): added real-Wi-Fi RSSI live mode
   (`scripts/wifi_live.py`, `collect/rssi_live.py`, dashboard signal panel)
   and the `/body` wireframe avatar view (user supplied a
