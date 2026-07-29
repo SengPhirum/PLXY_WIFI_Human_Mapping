@@ -10,6 +10,7 @@ from a different Claude account or a new machine).
 | `THESIS_PLAN.md` | Checking requirements — converted from the original .docx plan |
 | `RESEARCH_NOTES.md` | Understanding the science + empirical findings |
 | `POSE_FROM_WIFI.md` | Pose estimation: literature review, feasibility, what we built and measured |
+| `SENSING_RESEARCH.md` | RSSI human detection: literature, algorithm, measured detection limits |
 | `DECISIONS.md` | Before changing an existing design choice |
 
 Update `PROJECT_STATUS.md` (results, state, session log) and `TODO.md` at

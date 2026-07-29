@@ -76,16 +76,37 @@
 
 <div class="layout">
   <div class="card" id="signalCard" hidden style="flex:1 1 520px">
-    <h2>Real Wi-Fi signal — this device's connected link</h2>
-    <canvas id="spark" width="860" height="220" aria-label="Live RSSI"></canvas>
+    <h2>Real Wi-Fi signal — human detection</h2>
+    <div id="calibBanner" hidden style="background:rgba(42,120,214,.12);
+         border:1px solid var(--border); border-radius:8px; padding:8px 12px;
+         margin-bottom:10px; font-size:13px">
+      <b>Calibrating —</b> please keep the room <b>empty</b>.
+      <span id="calibPct">0%</span>
+      <div style="background:var(--grid);border-radius:3px;height:6px;margin-top:6px">
+        <div id="calibBar" style="width:0%;height:6px;border-radius:3px;
+             background:var(--accent)"></div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+      <span id="stateBadge" style="font-size:20px;font-weight:650">—</span>
+      <span class="pill" id="bpmPill" hidden>breathing <b id="bpmVal">—</b> bpm</span>
+      <span class="pill" id="linksPill">links <b id="linksVal">1</b></span>
+      <button id="recalBtn" style="margin-left:auto">recalibrate</button>
+    </div>
+    <canvas id="spark" width="860" height="200" aria-label="Live RSSI"></canvas>
     <div class="legend">
       <span><span class="sw" style="background:var(--accent)"></span> RSSI (dBm)</span>
-      <span id="presencePill" class="pill"><span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px"></span><span id="presenceText">quiet</span></span>
+      <span id="probePill" class="pill">probe —</span>
     </div>
+    <table style="margin-top:10px" aria-label="Detection features">
+      <thead><tr><th>feature</th><th>value</th><th>vs threshold</th></tr></thead>
+      <tbody id="featBody"></tbody>
+    </table>
     <div class="controls" style="color:var(--muted); font-size:12px">
-      Single-link RSSI carries no position — this mode demonstrates
-      presence/motion sensing on real signal. Walk between this computer and
-      the router.
+      Motion = band-limited RSSI variance (0.8–3 Hz). Breathing = spectral
+      peak in 0.16–0.6 Hz, which detects a <em>stationary</em> person.
+      Single-link RSSI carries no position — this is presence sensing, not
+      localization.
     </div>
   </div>
   <div class="card" id="mapCard">
@@ -370,15 +391,50 @@ function onRssiEvent(e) {
   g.fillText(hi.toFixed(0) + " dBm", 6, 14);
   g.fillText(lo.toFixed(0) + " dBm", 6, c.height - 6);
 
-  const pill = $("presencePill"), dot = pill.querySelector(".dot");
-  $("presenceText").textContent = e.presence
-    ? "presence / motion detected" : "quiet";
-  dot.style.background = e.presence ? "var(--good)" : "var(--muted)";
+  // Room state badge.
+  const STATE_UI = {
+    calibrating: ["calibrating…", "calibrating", "var(--muted)"],
+    empty:       ["room empty", "empty", "var(--muted)"],
+    stationary:  ["person present (still)", "still", "var(--accent)"],
+    motion:      ["person moving", "moving", "var(--good)"],
+  };
+  const [label, shortLabel, colour] = STATE_UI[e.state] || ["—", "—", "var(--muted)"];
+  $("stateBadge").textContent = label;
+  $("stateBadge").style.color = colour;
 
-  $("tZone").textContent = "n/a";
+  const calibrating = e.state === "calibrating";
+  $("calibBanner").hidden = !calibrating;
+  if (calibrating) {
+    const pct = Math.round((e.calibration_progress || 0) * 100);
+    $("calibPct").textContent = pct + "%";
+    $("calibBar").style.width = pct + "%";
+  }
+  $("bpmPill").hidden = !e.breathing_bpm;
+  if (e.breathing_bpm) $("bpmVal").textContent = e.breathing_bpm.toFixed(0);
+  $("linksVal").textContent = e.n_links || 1;
+  $("probePill").textContent = e.probe_active
+    ? "active probe on" : "active probe off";
+
+  // Per-feature detail for the connected link.
+  const link = (e.links || {}).connected;
+  if (link) {
+    const rows = [
+      ["motion (0.8–3 Hz)", link.motion, "dB"],
+      ["breathing SNR", link.breathing, ""],
+      ["shadowing", link.shadow, "dB"],
+      ["entropy", link.entropy, "bits"],
+    ];
+    $("featBody").innerHTML = rows.map(([name, v, unit]) =>
+      `<tr><td>${name}</td><td>${v.toFixed(2)} ${unit}</td>`
+      + `<td><div style="background:var(--grid);border-radius:3px;width:90px;height:8px">`
+      + `<div style="width:${Math.min(100, v * 25).toFixed(0)}%;height:8px;`
+      + `border-radius:3px;background:var(--accent)"></div></div></td></tr>`).join("");
+  }
+
+  $("tZone").textContent = shortLabel;
   $("tPos").textContent = e.rssi.toFixed(0) + " dBm";
-  $("tErr").textContent = e.motion.toFixed(2) + " dB";
-  $("tLat").textContent = "—";
+  $("tErr").textContent = link ? link.motion.toFixed(2) + " dB" : "—";
+  $("tLat").textContent = e.breathing_bpm ? e.breathing_bpm.toFixed(0) + " bpm" : "—";
   $("tCount").textContent = count;
   const now = performance.now();
   lastTimes.push(now); while (lastTimes.length > 12) lastTimes.shift();
@@ -445,8 +501,13 @@ async function init() {
     $("signalCard").hidden = false;
     $("mapCard").hidden = true;
     // Repurpose tile labels for signal mode.
+    document.querySelector("#tZone").previousElementSibling.textContent = "Room state";
     document.querySelector("#tPos").previousElementSibling.textContent = "RSSI";
     document.querySelector("#tErr").previousElementSibling.textContent = "Motion level";
+    document.querySelector("#tLat").previousElementSibling.textContent = "Breathing";
+    $("recalBtn").onclick = async () => {
+      await fetch("/api/recalibrate", { method: "POST" });
+    };
   }
   if (CFG.mode === "router") {
     $("stationsCard").hidden = false;

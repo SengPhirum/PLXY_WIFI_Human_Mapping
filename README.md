@@ -46,8 +46,13 @@ and **[docs/POSE_GUIDE.md](docs/POSE_GUIDE.md)**.
 
 **Real signal, today, no ESP32:**
 
-- `python scripts/wifi_live.py` — presence/motion sensing on the laptop's
-  own connected-link RSSI (single link).
+- `python scripts/wifi_live.py` — **human detection** on the laptop's own
+  connected-link RSSI: reports *empty* / *person present (still)* /
+  *person moving*, plus an estimated breathing rate. Detecting a motionless
+  person works by finding the respiration peak (0.16–0.6 Hz) in the RSSI
+  spectrum; thresholds calibrate themselves from a quiet-room window.
+  Details and measured performance:
+  [reference/SENSING_RESEARCH.md](reference/SENSING_RESEARCH.md).
 - `python scripts/router_live.py` — **whole-home mode**: polls the router
   for the RSSI of *every* connected device and maps per-link motion onto
   the floor plan (which link region is occupied). Works with OpenWrt-class

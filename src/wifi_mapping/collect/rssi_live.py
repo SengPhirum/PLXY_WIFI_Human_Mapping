@@ -13,9 +13,22 @@ Backends, tried in order:
 - macOS:   the ``airport -I`` utility
 - Windows: ``netsh wlan show interfaces`` (Signal % → dBm approximation)
 
-Motion metric: rolling standard deviation of RSSI over ~2 s, compared
-against a slowly-adapting quiet-baseline (EWMA). This is deliberately
-simple and explainable — it is a demo instrument, not a thesis result.
+Two practical problems dominate real deployments, and both are handled
+here:
+
+- **Stale RSSI.** Drivers only refresh the reported RSSI when frames
+  actually arrive. On an idle link the trace flatlines and no detector can
+  work. :class:`ActiveProbe` sends steady background traffic to the gateway
+  so every sample is fresh — this is usually the difference between "the
+  demo does nothing" and "the demo works".
+- **One link is not much.** :class:`ApScanner` harvests the RSSI of
+  *neighbouring* access points from beacon scans. Each AP↔laptop path
+  crosses a different part of the building, giving genuine multi-link
+  sensing from a single laptop with no extra hardware.
+
+Detection itself lives in :mod:`presence` (breathing-band spectral
+analysis, adaptive thresholds, multi-feature fusion). :class:`MotionDetector`
+below is the original simple variance detector, kept as a baseline.
 """
 
 from __future__ import annotations
@@ -26,7 +39,7 @@ import subprocess
 import threading
 import time
 from collections import deque
-from pathlib import Path
+from pathlib import Path  # noqa: F401  (used by ActiveProbe/ApScanner)
 
 AIRPORT = ("/System/Library/PrivateFrameworks/Apple80211.framework/"
            "Versions/Current/Resources/airport")
@@ -64,6 +77,73 @@ def parse_netsh(text: str) -> float | None:
     """
     m = re.search(r"Signal\s*:\s*(\d+)\s*%", text)
     return float(m.group(1)) / 2.0 - 100.0 if m else None
+
+
+# ------------------------------------------------------- neighbouring APs
+
+def parse_nmcli_scan(text: str) -> dict[str, float]:
+    """Parse ``nmcli -t -f BSSID,SIGNAL device wifi list`` → {bssid: dBm}.
+
+    nmcli escapes the colons in a BSSID as ``\\:``; signal is a 0–100
+    quality percent, converted with the same approximation as netsh.
+    """
+    out: dict[str, float] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # BSSID contains escaped colons, so split on the last unescaped one.
+        m = re.match(r"^(.*[0-9A-Fa-f]{2}):(\d{1,3})$", line)
+        if not m:
+            continue
+        bssid = m.group(1).replace("\\:", ":").lower()
+        if len(bssid.split(":")) != 6:
+            continue
+        out[bssid] = float(m.group(2)) / 2.0 - 100.0
+    return out
+
+
+def parse_iw_scan(text: str) -> dict[str, float]:
+    """Parse ``iw dev <if> scan dump`` → {bssid: dBm}."""
+    out: dict[str, float] = {}
+    bssid = None
+    for line in text.splitlines():
+        m = re.match(r"BSS ([0-9a-fA-F:]{17})", line.strip())
+        if m:
+            bssid = m.group(1).lower()
+            continue
+        m = re.search(r"signal:\s*(-?\d+(?:\.\d+)?)\s*dBm", line)
+        if m and bssid:
+            out[bssid] = float(m.group(1))
+            bssid = None
+    return out
+
+
+def parse_netsh_networks(text: str) -> dict[str, float]:
+    """Parse ``netsh wlan show networks mode=bssid`` → {bssid: dBm}."""
+    out: dict[str, float] = {}
+    bssid = None
+    for line in text.splitlines():
+        m = re.search(r"BSSID\s+\d+\s*:\s*([0-9a-fA-F:]{17})", line)
+        if m:
+            bssid = m.group(1).lower()
+            continue
+        m = re.search(r"Signal\s*:\s*(\d+)\s*%", line)
+        if m and bssid:
+            out[bssid] = float(m.group(1)) / 2.0 - 100.0
+            bssid = None
+    return out
+
+
+def parse_airport_scan(text: str) -> dict[str, float]:
+    """Parse macOS ``airport -s`` → {bssid: dBm}."""
+    out: dict[str, float] = {}
+    for line in text.splitlines()[1:]:
+        m = re.search(r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\s+(-\d+)", line)
+        if m:
+            parts = [p.zfill(2) for p in m.group(1).split(":")]
+            out[":".join(parts).lower()] = float(m.group(2))
+    return out
 
 
 # ----------------------------------------------------------------- sampler
@@ -128,6 +208,140 @@ class RssiSampler:
         return self.backend is not None
 
 
+class ActiveProbe:
+    """Keep the link busy so the driver refreshes RSSI every sample.
+
+    Without traffic, most drivers report the RSSI of the last received
+    frame — which on an idle link can be seconds old, flatlining the trace.
+    A low-rate ping to the default gateway (a few hundred bytes/s) forces a
+    fresh measurement per interval. Harmless to the network; stops cleanly.
+    """
+
+    def __init__(self, target: str | None = None, rate_hz: float = 10.0):
+        self.target = target or self._default_gateway()
+        self.rate_hz = rate_hz
+        self._proc: subprocess.Popen | None = None
+
+    @staticmethod
+    def _default_gateway() -> str | None:
+        """Best-effort default-gateway lookup across platforms."""
+        try:
+            out = subprocess.run(["ip", "route"], capture_output=True,
+                                 text=True, timeout=3).stdout
+            m = re.search(r"default via (\S+)", out)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+        for cmd, pat in (
+            (["route", "-n", "get", "default"], r"gateway:\s*(\S+)"),   # macOS
+            (["ipconfig"], r"Default Gateway.*?:\s*([0-9.]+)"),          # Windows
+        ):
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True,
+                                     timeout=3).stdout
+                m = re.search(pat, out)
+                if m and m.group(1).strip():
+                    return m.group(1).strip()
+            except Exception:
+                continue
+        return None
+
+    @property
+    def available(self) -> bool:
+        return bool(self.target) and shutil.which("ping") is not None
+
+    def start(self) -> bool:
+        if not self.available or self._proc is not None:
+            return False
+        interval = max(0.05, 1.0 / self.rate_hz)
+        is_windows = not Path("/proc").exists() and shutil.which("cmd")
+        cmd = (["ping", "-t", self.target] if is_windows
+               else ["ping", "-i", f"{interval:.2f}", self.target])
+        try:
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            # Sub-second ping intervals need root on some systems; retry at 1 Hz.
+            try:
+                self._proc = subprocess.Popen(
+                    ["ping", self.target], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+                return True
+            except Exception:
+                return False
+
+    def stop(self) -> None:
+        if self._proc is not None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=2)
+            except Exception:
+                self._proc.kill()
+            self._proc = None
+
+
+class ApScanner:
+    """RSSI of neighbouring access points, for multi-link sensing.
+
+    Every AP the laptop can hear is a separate propagation path through the
+    building. Scanning is slow (~1–3 s) and briefly interrupts the
+    connection, so this runs at a low rate and is best used for motion, not
+    breathing — the connected-link sampler stays fast for that.
+
+    Prefers ``nmcli`` (uses NetworkManager's cache, no root) then ``iw scan
+    dump`` (also cached), falling back to platform equivalents.
+    """
+
+    def __init__(self, interface: str | None = None, min_rssi: float = -85.0,
+                 max_aps: int = 6):
+        self.interface = interface
+        self.min_rssi = min_rssi
+        self.max_aps = max_aps
+        self.backend = self._detect_backend()
+
+    def _detect_backend(self) -> str | None:
+        if shutil.which("nmcli"):
+            return "nmcli"
+        if shutil.which("iw"):
+            return "iw"
+        if Path(AIRPORT).exists():
+            return "airport"
+        if shutil.which("netsh"):
+            return "netsh"
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self.backend is not None
+
+    def _run(self, cmd: list[str], timeout: float = 8.0) -> str:
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout).stdout
+        except Exception:
+            return ""
+
+    def scan(self) -> dict[str, float]:
+        """{bssid: rssi_dbm} for the strongest neighbouring APs."""
+        if self.backend == "nmcli":
+            table = parse_nmcli_scan(
+                self._run(["nmcli", "-t", "-f", "BSSID,SIGNAL", "device", "wifi", "list"]))
+        elif self.backend == "iw":
+            iface = self.interface or "wlan0"
+            table = parse_iw_scan(self._run(["iw", "dev", iface, "scan", "dump"]))
+        elif self.backend == "airport":
+            table = parse_airport_scan(self._run([AIRPORT, "-s"]))
+        elif self.backend == "netsh":
+            table = parse_netsh_networks(
+                self._run(["netsh", "wlan", "show", "networks", "mode=bssid"]))
+        else:
+            return {}
+        strong = {b: r for b, r in table.items() if r >= self.min_rssi}
+        return dict(sorted(strong.items(), key=lambda kv: -kv[1])[: self.max_aps])
+
+
 class MotionDetector:
     """Presence/motion from RSSI fluctuation.
 
@@ -166,41 +380,98 @@ class MotionDetector:
 
 
 class RssiMonitor:
-    """Background thread: sample RSSI at ``rate_hz``, keep latest reading.
+    """Background sensing on the machine's own Wi-Fi.
 
-    ``latest()`` → dict(rssi, motion, presence, t) or None before first
-    successful sample.
+    Runs three things: a fast sampler on the connected link, an optional
+    :class:`ActiveProbe` keeping that link's RSSI fresh, and an optional
+    slow :class:`ApScanner` adding neighbouring APs as extra links. All
+    streams feed :class:`~.presence.MultiLinkPresence`.
+
+    ``latest()`` → dict with the fused room state, per-link detail, and the
+    connected link's raw RSSI, or None before the first sample.
     """
 
-    def __init__(self, rate_hz: float = 10.0, interface: str | None = None):
+    SCAN_RATE_HZ = 0.5   # neighbour scans are slow and disturb the link
+
+    def __init__(self, rate_hz: float = 10.0, interface: str | None = None,
+                 active_probe: bool = True, scan_neighbours: bool = True,
+                 calibration_s: float = 20.0, sensitivity: float = 1.25):
+        from .presence import MultiLinkPresence
+
         self.sampler = RssiSampler(interface)
-        self.detector = MotionDetector(rate_hz=rate_hz)
         self.rate_hz = rate_hz
+        self.presence = MultiLinkPresence(rate_hz=rate_hz,
+                                          calibration_s=calibration_s,
+                                          sensitivity=sensitivity)
+        # Legacy simple detector, kept so the baseline stays comparable.
+        self.detector = MotionDetector(rate_hz=rate_hz)
+
+        self.probe = ActiveProbe(rate_hz=rate_hz) if active_probe else None
+        self.scanner = ApScanner(interface) if scan_neighbours else None
+        self.probe_active = False
+
         self._latest: dict | None = None
         self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._threads: list[threading.Thread] = []
 
-    def _loop(self) -> None:
+    # ------------------------------------------------------------- threads
+
+    def _sample_loop(self) -> None:
         period = 1.0 / self.rate_hz
         while not self._stop.is_set():
             t0 = time.time()
             rssi = self.sampler.sample()
             if rssi is not None:
-                level, presence = self.detector.update(rssi, t0)
-                self._latest = {"t": t0, "rssi": rssi,
-                                "motion": level, "presence": presence}
+                self.presence.update("connected", rssi, t0)
+                level, moving = self.detector.update(rssi, t0)
+                room = self.presence.room_state()
+                self._latest = {
+                    "t": t0,
+                    "rssi": rssi,
+                    "motion": level,               # legacy baseline fields
+                    "presence": moving,
+                    "probe_active": self.probe_active,
+                    **room,
+                }
             time.sleep(max(0.0, period - (time.time() - t0)))
+
+    def _scan_loop(self) -> None:
+        period = 1.0 / self.SCAN_RATE_HZ
+        while not self._stop.is_set():
+            t0 = time.time()
+            try:
+                for bssid, rssi in self.scanner.scan().items():
+                    self.presence.update(f"ap:{bssid}", rssi, t0,
+                                         rate_hz=self.SCAN_RATE_HZ)
+            except Exception:
+                pass
+            time.sleep(max(0.0, period - (time.time() - t0)))
+
+    # --------------------------------------------------------- lifecycle
 
     def start(self) -> None:
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True,
-                                        name="rssi-monitor")
-        self._thread.start()
+        if self.probe is not None:
+            self.probe_active = self.probe.start()
+        self._threads = [threading.Thread(target=self._sample_loop, daemon=True,
+                                          name="rssi-monitor")]
+        if self.scanner is not None and self.scanner.available:
+            self._threads.append(threading.Thread(target=self._scan_loop,
+                                                  daemon=True, name="ap-scanner"))
+        for t in self._threads:
+            t.start()
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
+        for t in self._threads:
+            t.join(timeout=3.0)
+        self._threads.clear()
+        if self.probe is not None:
+            self.probe.stop()
+            self.probe_active = False
+
+    def recalibrate(self) -> None:
+        self.presence.recalibrate()
 
     def latest(self) -> dict | None:
         return self._latest

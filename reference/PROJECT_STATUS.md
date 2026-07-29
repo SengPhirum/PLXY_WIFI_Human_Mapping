@@ -5,7 +5,7 @@
 > re-deriving anything. Read this first, then `TODO.md` for next actions.
 > Keep this file updated at the end of every working session.
 
-**Last updated:** 2026-07-29 (fourth session)
+**Last updated:** 2026-07-29 (fifth session)
 **State:** Software prototype complete and verified end-to-end on simulated
 data. Three tracks working: (1) localization, (2) real-signal presence
 sensing (laptop RSSI + router multi-device), (3) **pose estimation**
@@ -54,12 +54,20 @@ Full instructions: `docs/SETUP_GUIDE.md`. Codebase map:
 - **Scripts**: `generate_dataset` → `train` → `evaluate` → `run_demo`
   (one-command demo with caching), `collect_esp32` (hardware),
   `wifi_live` (real RSSI from the machine's connected Wi-Fi).
-- **Real-signal mode** (`collect/rssi_live.py`, server `mode="rssi"`):
-  cross-platform RSSI sampler (Linux /proc/net/wireless + iw, macOS
-  airport, Windows netsh) at 10 Hz, motion/presence detection via rolling
-  std vs adaptive quiet baseline; dashboard switches to a live signal
-  sparkline + presence pill. Presence/motion ONLY — one link has no
-  position information; this is deliberately scoped and documented.
+- **Real-signal human detection** (`collect/rssi_live.py`,
+  `collect/presence.py`, server `mode="rssi"`): cross-platform RSSI
+  sampler at 10 Hz plus a research-grounded detector reporting
+  **empty / stationary / motion** with an estimated breathing rate.
+  Four features (band-limited motion variance 0.8–3 Hz, respiration-band
+  spectral SNR 0.16–0.6 Hz with peak-stability test, shadowing, entropy),
+  autonomous MAD-based thresholds learned in a quiet-room calibration,
+  hysteretic state machine with motion persistence. Plus `ActiveProbe`
+  (pings the gateway so RSSI stays fresh — fixes the flat-trace failure)
+  and `ApScanner` (neighbouring APs as extra links). Measured: 100% state
+  classification on synthetic scenarios, occupancy detection down to
+  0.4 dB breathing modulation, 0% false alarms at default sensitivity
+  1.25 — full tables and sources in `SENSING_RESEARCH.md`. Presence ONLY:
+  one link has no position information.
 - **Pose track** (`simulate/body_model.py`, `models/pose.py`,
   `config/pose.yaml`, `scripts/generate_pose_dataset.py`,
   `scripts/train_pose.py`, server `mode="pose"`, `/body` renderer):
@@ -171,6 +179,17 @@ numbers: link count (3→6: 0.39→0.47) and data volume (4×: 0.47→0.583).
 
 ## Session log
 
+- **2026-07-29 e** (Claude Code): user asked to research and improve human
+  detection on the live Wi-Fi mode. Researched device-free RSSI sensing
+  (autonomous thresholds, entropy features, RSSI respiration monitoring,
+  multi-AP beacon scanning) → `SENSING_RESEARCH.md`. Replaced the rolling-
+  variance detector with `collect/presence.py`. Tuning found three real
+  bugs worth remembering: (1) plain variance confuses breathing with
+  walking — fixed by band-passing motion to 0.8–3 Hz; (2) RSSI's 1 dB
+  quantization makes isolated steps ring the filter — fixed by the upper
+  band edge plus motion persistence; (3) strong-but-wandering spectral
+  peaks cause false breathing alarms — fixed by requiring peak stability.
+  49 tests passing; UI verified through all three states.
 - **2026-07-29 d** (Claude Code): user asked for the DensePose-from-WiFi
   result (dense mesh on people). Researched the actual paper + related work
   first (`POSE_FROM_WIFI.md`, with sources): CMU used 2×3-antenna routers

@@ -27,11 +27,16 @@ See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 
 ## Now (software, no hardware required)
 
-- [ ] **Run `scripts/wifi_live.py` on a real laptop** (container has no
-      wireless): confirm the RSSI backend detection on the user's actual
-      OS, tune MotionDetector threshold/hold to that environment. User's
-      first test failed — walk through SETUP_GUIDE §3b troubleshooting
-      table (VM/WSL? flat RSSI from driver caching? power-save?).
+- [ ] **Validate the presence detector on a real laptop** (container has no
+      wireless). Record three labelled RSSI captures — empty room,
+      occupied-still, occupied-walking — and re-run the evaluation in
+      `SENSING_RESEARCH.md` §4 against real data. That converts the
+      detection-limit table from synthetic to measured, and is a
+      publishable result on its own.
+- [ ] Per-link slow re-calibration (drift tracking) so long sessions don't
+      need a manual `recalibrate`.
+- [ ] Feed the router mode's per-device links into `MultiLinkPresence` so a
+      whole home reports one occupancy state per area.
 - [ ] **Run `scripts/router_live.py` against a real router.** Needs
       OpenWrt/GL.iNet/DD-WRT-class ssh access (ROUTER_GUIDE.md). If the
       user's router is a stock ISP box, the cheapest path is a $20–30
@@ -92,6 +97,9 @@ See `PROJECT_STATUS.md` for what is already done, and the 12-month plan in
 
 ## Done
 
+- [x] Research-grounded presence detector: breathing-band detection of
+      stationary people, autonomous thresholds, active probing, multi-AP
+      links, three-state UI (2026-07-29)
 - [x] Pose track: articulated body simulator, per-joint CSI scattering,
       motion-spectrum features, posture + joint models, prior fusion,
       live skeleton mesh view, research review (2026-07-29)

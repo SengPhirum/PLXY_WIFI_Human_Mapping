@@ -77,7 +77,8 @@ class Broadcaster:
 def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
                sim_seed: int | None = None,
                wifi_interface: str | None = None,
-               router_transport=None) -> FastAPI:
+               router_transport=None,
+               rssi_options: dict | None = None) -> FastAPI:
     app = FastAPI(title="Wi-Fi Human Mapping", version="0.1.0")
     hub = Broadcaster()
     state: dict[str, Any] = {
@@ -171,13 +172,17 @@ def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
         """Real Wi-Fi from the connected interface → signal/motion events."""
         from ..collect.rssi_live import RssiMonitor
 
-        monitor = RssiMonitor(rate_hz=10.0, interface=wifi_interface)
+        monitor = RssiMonitor(rate_hz=10.0, interface=wifi_interface,
+                              **(rssi_options or {}))
         if not monitor.sampler.available:
             state["error"] = ("no wireless interface backend found "
                               "(/proc/net/wireless, iw, airport, netsh)")
             return
         monitor.start()
         state["backend"] = monitor.sampler.backend
+        state["probe_active"] = monitor.probe_active
+        state["scanner"] = monitor.scanner.backend if monitor.scanner else None
+        app.state.rssi_monitor = monitor
         last_sent = 0.0
         while True:
             await asyncio.sleep(0.1)
@@ -277,6 +282,16 @@ def create_app(cfg: Config, predictor: LivePredictor | None, mode: str = "sim",
             state["last_latency_ms"] = event["latency_ms"]
             await hub.send(event)
         return JSONResponse({"ok": True, "predicted": event is not None})
+
+    @app.post("/api/recalibrate")
+    async def api_recalibrate() -> JSONResponse:
+        """Restart quiet-room calibration (call with the room empty)."""
+        monitor = getattr(app.state, "rssi_monitor", None)
+        if monitor is None:
+            return JSONResponse({"ok": False, "error": "not in rssi mode"},
+                                status_code=409)
+        monitor.recalibrate()
+        return JSONResponse({"ok": True})
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

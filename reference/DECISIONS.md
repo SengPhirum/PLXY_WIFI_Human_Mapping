@@ -5,6 +5,47 @@ supersede.
 
 ---
 
+## 2026-07-29 e — Presence detection rebuild
+
+**D21. Breathing detection is the capability, not an extra.** Rolling
+variance only ever detects *movement*; a person sitting still reads as an
+empty room, which is the single biggest failure of naive Wi-Fi presence
+sensing. The literature establishes that respiration is observable in
+commodity RSSI, so respiration-band spectral analysis (0.16–0.6 Hz) is now
+the primary stationary-presence cue. Cost: it needs a ~20 s window, hence
+the ~20 s warm-up and ~5 s release latency — accepted and documented.
+
+**D22. Motion must be band-limited, not just high-passed.** Three tuning
+bugs, all worth remembering because each looked like a threshold problem
+and was actually a physics problem:
+  1. plain variance conflates breathing with walking → band-pass *above*
+     the respiration band;
+  2. RSSI is quantized to 1 dB, and an isolated level step rings a
+     high-pass filter into what looks like motion → cap the band at 3 Hz
+     (nothing human is faster) and require ~0.5 s of *sustained* energy;
+  3. noise produces strong in-band spectral peaks, but they wander →
+     require the respiration peak to be stable (< 0.05 Hz) before
+     declaring a breathing person.
+
+**D23. Autonomous thresholds, not constants.** Thresholds come from
+`median + k·MAD` of each feature's own quiet-room distribution during
+calibration, with physically-motivated floors (e.g. the motion floor sits
+above a single 1 dB LSB step). Removes per-room tuning; the price is that
+the room must be empty during calibration, which the UI states and offers a
+`recalibrate` button for.
+
+**D24. Default sensitivity 1.25, chosen by sweep not by feel.** Measured
+across breathing depths and noise levels: 1.0 leaks ~5% false alarms, 1.5
+starts losing weak breathers, 1.25 gives full detection to 0.4 dB with zero
+false alarms. Recorded in SENSING_RESEARCH.md §4 so it can be re-derived.
+
+**D25. Active probing ships on by default.** RSSI only refreshes when
+frames arrive; an idle link flatlines and no algorithm can help. A low-rate
+ping to the gateway is a few hundred bytes/s and is the difference between
+a working and a dead demo. Opt out with `--no-probe`.
+
+---
+
 ## 2026-07-29 d — Pose estimation track
 
 **D16. Build the pose *pipeline*, not a fake DensePose.** The requested

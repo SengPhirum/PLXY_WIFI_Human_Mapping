@@ -112,25 +112,58 @@ the demo against the real signal of the currently associated access point:
 python scripts/wifi_live.py        # → dashboard + /body in real-signal mode
 ```
 
-This samples the connected link's RSSI at 10 Hz (Linux
-`/proc/net/wireless`/`iw`, macOS `airport`, Windows `netsh`) and runs live
-motion/presence detection on the fluctuation. Walk between the laptop and
-the router: the RSSI trace visibly swings, the presence pill flips to
-*motion detected*, and the /body avatar wakes up and reacts.
+It samples the connected link's RSSI at 10 Hz (Linux
+`/proc/net/wireless`/`iw`, macOS `airport`, Windows `netsh`) and reports
+**three states**:
 
-What this mode honestly is: **presence/motion sensing on real signal**
-(thesis plan scope row 1). A single laptop↔AP link carries no position
-information, and laptops cannot expose CSI without special firmware — so
-there is no localization here. Localization = simulator demo today, ESP32
-multi-link CSI when the hardware arrives ([HARDWARE_GUIDE.md](HARDWARE_GUIDE.md)).
+| State | Meaning | How it's detected |
+|---|---|---|
+| `room empty` | nobody there | no feature above its learned threshold |
+| `person present (still)` | someone sitting/standing motionless | **respiration peak** at 0.16–0.6 Hz in the RSSI spectrum, with a stable rate — reports estimated breathing rate in bpm |
+| `person moving` | someone walking through | sustained band-limited (0.8–3 Hz) RSSI variance |
+
+**How to use it:**
+
+1. Start it and **keep the room empty for the first ~20 s** — the detector
+   calibrates its own thresholds from the quiet-room signal (the dashboard
+   shows a progress bar). No hand-tuning needed.
+2. Walk in: state should go to *person moving*.
+3. Sit still: after the ~20 s spectral window fills, it should hold
+   *person present (still)* and display a breathing rate.
+4. Leave: it clears back to *empty* in about 5–6 s.
+
+Use `recalibrate` on the dashboard after moving the laptop or router.
+
+Two things it does automatically that make real signal usable: it pings the
+gateway so the driver keeps RSSI fresh (an idle link's RSSI goes stale and
+flatlines — the most common reason such a demo does nothing), and it scans
+neighbouring APs, each of which is an extra sensing link through a
+different part of the building.
+
+Useful flags: `--sensitivity 1.0` (detect weaker signals, more false
+alarms), `--no-probe` (don't generate traffic), `--no-scan` (connected link
+only), `--calibration 30`.
+
+Measured performance, tuning, and the research this is based on:
+**[../reference/SENSING_RESEARCH.md](../reference/SENSING_RESEARCH.md)** —
+100% state classification on synthetic scenarios, reliable down to a 0.4 dB
+breathing modulation, 0% false alarms at the default sensitivity.
+
+What this mode honestly is: **presence sensing on real signal** (thesis plan
+scope row 1). A single laptop↔AP link carries no position information, and
+laptops cannot expose CSI without special firmware — so there is no
+localization here. Localization = simulator demo today, ESP32 multi-link
+CSI when the hardware arrives ([HARDWARE_GUIDE.md](HARDWARE_GUIDE.md)).
 
 **If `wifi_live.py` "doesn't work" for you, check in this order:**
 
 | Symptom | Cause / fix |
 |---|---|
 | `No wireless interface found` | You're in a VM/WSL/container or on Ethernet — these have no Wi-Fi device. Run on the host OS of a Wi-Fi-connected laptop. WSL2 specifically cannot see the Wi-Fi adapter; use native Windows Python there. |
-| Trace is a flat line, never any motion | Some drivers cache RSSI aggressively. Move *between* laptop and router (not beside), within ~3 m of the straight line. Generate link traffic (`ping 192.168.1.1` in another terminal) — RSSI updates with traffic. |
-| Motion never triggers presence | Fluctuation below threshold — the detector needs >0.6 dB excess std. Try a closer router, 2.4 GHz instead of 5 GHz, or the router mode below (multiple links = much better sensitivity). |
+| Trace is a flat line, never any motion | The active probe should prevent this; check the dashboard shows `active probe on`. If off, no gateway was found — run `ping <router-ip>` in another terminal. Also move *between* laptop and router, within ~3 m of the straight line. |
+| Never leaves `calibrating` | Calibration needs ~20 s of samples; if the RSSI source returns nothing, no samples accumulate. Check the trace is updating. |
+| Always says a person is present | The room was not empty during calibration, so a person is baked into the baseline. Press `recalibrate` with the room empty. |
+| Misses a still person | Breathing modulation below ~0.4 dB. Try `--sensitivity 1.0`, sit closer to the laptop–router line, or use 2.4 GHz. |
 | Trace updates very slowly | Power-save NIC. Disable Wi-Fi power management (`sudo iw dev wlan0 set power_save off`). |
 
 ## 3c. Whole-home sensing through the router (all connected devices)
